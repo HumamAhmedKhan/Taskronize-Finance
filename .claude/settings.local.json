@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(npm run:*)",
+      "Bash(npx supabase:*)",
+      "Bash(npm list:*)",
+      "Bash(grep -v \"└──$\\\\|npm list\")",
+      "Bash(npx tsc:*)",
+      "Bash(node:*)",
+      "Bash(node -e \"const t = require\\(''''@tiptap/extension-bubble-menu''''\\); const r = require\\(''''@tiptap/react''''\\); console.log\\(''''BubbleMenu in ext:'''', typeof t.BubbleMenu, ''''| ReactRenderer:'''', typeof r.ReactRenderer\\)\")",
+      "Bash(npx vite:*)"
+    ]
+  }
+}

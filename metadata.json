@@ -1,0 +1,5 @@
+{
+  "name": "Taskronize Finance CRM",
+  "description": "A comprehensive finance management system with Supabase backend, multi-user permissions, and automated payment tracking for Taskronize.",
+  "requestFramePermissions": []
+}
