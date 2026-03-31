@@ -30,6 +30,25 @@ interface PaymentsViewProps {
   globalEnd: string;
 }
 
+// Reliably extracts paid IDs from a payment, checking both the array column
+// and the notes field (JSON embedded as fallback for DBs that don't persist text[])
+const extractPaidIds = (p: { paid_revenue_commission_ids?: string[] | null; notes?: string | null }): string[] => {
+  // 1. Try the array column first
+  const ids = p.paid_revenue_commission_ids;
+  if (Array.isArray(ids) && ids.length > 0) return ids.map(String);
+  if (typeof ids === 'string' && ids.length > 0) {
+    try { const parsed = JSON.parse(ids); if (Array.isArray(parsed)) return parsed.map(String); } catch {}
+    // PostgreSQL array notation: {ALLOC_1,ALLOC_2}
+    if (ids.startsWith('{')) return ids.slice(1, -1).split(',').map(s => s.trim().replace(/^"|"$/g, ''));
+  }
+  // 2. Fall back to notes field: looks for PaidIDs:[...]
+  if (p.notes) {
+    const match = p.notes.match(/PaidIDs:(\[.*?\])/);
+    if (match) { try { const parsed = JSON.parse(match[1]); if (Array.isArray(parsed)) return parsed.map(String); } catch {} }
+  }
+  return [];
+};
+
 const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) => {
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [allocations, setAllocations] = useState<ProjectAllocation[]>([]);
@@ -125,12 +144,7 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
           const key = `${rev.id}-${member.name}`;
           const isPaid = payments.some(p => {
             if (Number(p.recipient_id) !== Number(member.id)) return false;
-            const ids = p.paid_revenue_commission_ids;
-            const parsedIds: string[] = Array.isArray(ids)
-              ? ids
-              : typeof ids === 'string'
-                ? (() => { try { return JSON.parse(ids); } catch { return [ids]; } })()
-                : [];
+            const parsedIds = extractPaidIds(p);
             return parsedIds.some(id => String(id) === key);
           });
           
@@ -162,16 +176,11 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
         })
         .filter(a => {
           const isPaid = payments.some(p => {
-            const isRecipient = Number(p.recipient_id) === Number(member.id);
-            const ids = p.paid_revenue_commission_ids;
-            const parsedIds: string[] = Array.isArray(ids)
-              ? ids
-              : typeof ids === 'string'
-                ? (() => { try { return JSON.parse(ids); } catch { return [ids]; } })()
-                : [];
+            if (Number(p.recipient_id) !== Number(member.id)) return false;
+            const parsedIds = extractPaidIds(p);
             const hasIdInArray = parsedIds.some(id => String(id) === `ALLOC_${a.id}`);
             const hasLegacyNote = p.notes?.includes(`Alloc: ${a.id}`);
-            return isRecipient && (hasIdInArray || hasLegacyNote);
+            return hasIdInArray || hasLegacyNote;
           });
           return !isPaid;
         })
@@ -512,15 +521,19 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
         ...allocToMark.map((id: number) => `ALLOC_${id}`)
       ];
 
-      const payload = { 
-        date: paymentMeta.date, 
-        payment_type: selectedMember.role === 'Partner' ? 'partner' : 'developer', 
-        recipient_id: selectedMember.id, 
-        recipient_name: selectedMember.name, 
-        total_amount: auditCalculation.payable, 
-        payment_method: paymentMeta.method, 
-        notes: `Audit Settlement. Deductions: Overheads(${auditCalculation.connectsTotal.toFixed(2)}), Prod-Alloc(${(auditCalculation.prodTotal).toFixed(2)}). Range: ${globalStart} - ${globalEnd}`, 
-        paid_revenue_commission_ids: combinedPaidIds 
+      // Embed paid IDs into notes as a reliable text fallback
+      // (paid_revenue_commission_ids array column may not persist correctly in all DB configs)
+      const paidIdsJson = JSON.stringify(combinedPaidIds);
+
+      const payload = {
+        date: paymentMeta.date,
+        payment_type: selectedMember.role === 'Partner' ? 'partner' : 'developer',
+        recipient_id: selectedMember.id,
+        recipient_name: selectedMember.name,
+        total_amount: auditCalculation.payable,
+        payment_method: paymentMeta.method,
+        notes: `Audit Settlement. Deductions: Overheads(${auditCalculation.connectsTotal.toFixed(2)}), Prod-Alloc(${(auditCalculation.prodTotal).toFixed(2)}). Range: ${globalStart} - ${globalEnd}. PaidIDs:${paidIdsJson}`,
+        paid_revenue_commission_ids: combinedPaidIds
       };
 
       const { data: p, error: insertError } = await supabase.from('production_payments').insert(payload).select().single();
