@@ -88,7 +88,7 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
 
     const tableData = currentMonthAllocations.map(alloc => {
       const project = projects.find(p => p.id === alloc.project_id);
-      const isPaid = currentMonthPayments.some(p =>
+      const isPaid = myPayments.some(p =>
         p.paid_revenue_commission_ids?.includes(`ALLOC_${alloc.id}`) ||
         p.notes?.includes(`Alloc: ${alloc.id}`)
       );
