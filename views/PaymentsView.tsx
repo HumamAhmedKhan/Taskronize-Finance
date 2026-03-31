@@ -123,7 +123,16 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
           const grossShareValue = details.grossCommissions[member.name] || 0;
           
           const key = `${rev.id}-${member.name}`;
-          const isPaid = payments.some(p => p.recipient_id === member.id && p.paid_revenue_commission_ids?.includes(key));
+          const isPaid = payments.some(p => {
+            if (Number(p.recipient_id) !== Number(member.id)) return false;
+            const ids = p.paid_revenue_commission_ids;
+            const parsedIds: string[] = Array.isArray(ids)
+              ? ids
+              : typeof ids === 'string'
+                ? (() => { try { return JSON.parse(ids); } catch { return [ids]; } })()
+                : [];
+            return parsedIds.some(id => String(id) === key);
+          });
           
           if (!isPaid && grossShareValue > 0) {
             const linkedProjs = projectRevenueLinks
@@ -153,8 +162,14 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
         })
         .filter(a => {
           const isPaid = payments.some(p => {
-            const isRecipient = p.recipient_id === member.id;
-            const hasIdInArray = p.paid_revenue_commission_ids?.includes(`ALLOC_${a.id}`);
+            const isRecipient = Number(p.recipient_id) === Number(member.id);
+            const ids = p.paid_revenue_commission_ids;
+            const parsedIds: string[] = Array.isArray(ids)
+              ? ids
+              : typeof ids === 'string'
+                ? (() => { try { return JSON.parse(ids); } catch { return [ids]; } })()
+                : [];
+            const hasIdInArray = parsedIds.some(id => String(id) === `ALLOC_${a.id}`);
             const hasLegacyNote = p.notes?.includes(`Alloc: ${a.id}`);
             return isRecipient && (hasIdInArray || hasLegacyNote);
           });
