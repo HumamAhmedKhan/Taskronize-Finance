@@ -86,9 +86,9 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
     const totalPaidAllTime = myPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
     const pendingBalance = totalAllocatedAllTime - totalPaidAllTime;
 
-    const tableData = myAllocations.map(alloc => {
+    const tableData = currentMonthAllocations.map(alloc => {
       const project = projects.find(p => p.id === alloc.project_id);
-      const isPaid = myPayments.some(p =>
+      const isPaid = currentMonthPayments.some(p =>
         p.paid_revenue_commission_ids?.includes(`ALLOC_${alloc.id}`) ||
         p.notes?.includes(`Alloc: ${alloc.id}`)
       );
@@ -113,14 +113,14 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
             <div className="flex items-center gap-3 mb-2">
               <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600"><DollarSign size={20} /></div>
-              <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider">Allocated (This Month)</h3>
+              <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider">Allocated (Selected Period)</h3>
             </div>
             <div className="text-3xl font-black text-slate-900">{formatCurrency(totalAllocatedThisMonth)}</div>
           </div>
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
             <div className="flex items-center gap-3 mb-2">
               <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600"><CheckCircle2 size={20} /></div>
-              <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider">Paid (This Month)</h3>
+              <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider">Paid (Selected Period)</h3>
             </div>
             <div className="text-3xl font-black text-slate-900">{formatCurrency(totalPaidThisMonth)}</div>
           </div>
@@ -138,9 +138,10 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
           </div>
           <Table
             data={tableData}
+            rowKey={(row) => row.id}
             columns={[
               { header: 'PROJECT', render: (row) => <span className="font-bold text-slate-900">{row.project_name}</span> },
-              { header: 'DATE', render: (row) => <span className="text-slate-500">{new Date(row.date).toLocaleDateString()}</span> },
+              { header: 'DATE', render: (row) => <span className="text-slate-500">{row.date ? new Date(row.date).toLocaleDateString() : '—'}</span> },
               { header: 'ALLOCATION', render: (row) => <span className="font-bold text-slate-700">{formatCurrency(row.allocation)}</span> },
               { header: 'PAID', render: (row) => <span className="text-emerald-600 font-bold">{formatCurrency(row.paid)}</span> },
               { header: 'PENDING', render: (row) => <span className={`font-bold ${row.pending > 0 ? 'text-amber-600' : 'text-slate-500'}`}>{formatCurrency(row.pending)}</span> }
