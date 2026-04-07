@@ -3,7 +3,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { supabase, db } from '../lib/supabase';
 import { User, PagePermissions, PermissionLevel, IncomeStream } from '../types';
 import { AuthContext } from '../App';
-import { Plus, Shield, User as UserIcon, Check, Edit2, ShieldAlert, X } from 'lucide-react';
+import { Plus, Shield, User as UserIcon, Check, Edit2, ShieldAlert, X, Eye, EyeOff } from 'lucide-react';
 
 const UsersView: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
@@ -34,6 +34,9 @@ const UsersView: React.FC = () => {
       pmManageStatuses: 'none'
     }
   });
+
+  const [revealedPasswords, setRevealedPasswords] = useState<Set<number>>(new Set());
+  const [resetPassword, setResetPassword] = useState('');
 
   const auth = useContext(AuthContext);
 
@@ -79,11 +82,13 @@ const UsersView: React.FC = () => {
       }
 
       if (dataToSave.id) {
+        if (resetPassword) dataToSave.password_hash = resetPassword;
         await db.update('users', dataToSave.id, dataToSave);
       } else {
         await db.insert('users', dataToSave);
       }
       setShowModal(false);
+      setResetPassword('');
       loadData();
       alert('User updated. They may need to log out and back in to see changes.');
     } catch (err: any) {
@@ -152,6 +157,7 @@ const UsersView: React.FC = () => {
                 monthlyClosing: 'none', backup: 'none', aiAdvisor: 'none'
               }
             });
+            setResetPassword('');
             setShowModal(true);
           }}
           className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-slate-800 transition-all"
@@ -172,7 +178,7 @@ const UsersView: React.FC = () => {
                   <UserIcon size={24} />
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setFormData(user); setShowModal(true); }} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit2 size={16} /></button>
+                  <button onClick={() => { setFormData(user); setResetPassword(''); setShowModal(true); }} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit2 size={16} /></button>
                 </div>
               </div>
               <div className="flex items-center gap-2 mb-1">
@@ -181,7 +187,29 @@ const UsersView: React.FC = () => {
                 {user.user_type === 'partner' && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded-md text-[10px] font-bold uppercase tracking-wider">Partner</span>}
                 {user.user_type === 'team_member' && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-md text-[10px] font-bold uppercase tracking-wider">Team Member</span>}
               </div>
-              <p className="text-slate-500 text-sm mb-4">@{user.username}</p>
+              <p className="text-slate-500 text-sm">@{user.username}</p>
+              <div className="flex items-center gap-2 mt-1 mb-4">
+                <span className="text-slate-400 text-xs font-medium">Password:</span>
+                {user.password_hash?.startsWith('$2a$') || user.password_hash?.startsWith('$2b$') ? (
+                  <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md font-medium">Hashed — reset to reveal</span>
+                ) : revealedPasswords.has(user.id) ? (
+                  <span className="text-slate-700 font-mono text-xs">{user.password_hash}</span>
+                ) : (
+                  <span className="text-slate-400 font-mono text-xs tracking-widest">••••••••</span>
+                )}
+                {!user.password_hash?.startsWith('$2a$') && !user.password_hash?.startsWith('$2b$') && (
+                  <button
+                    onClick={() => setRevealedPasswords(prev => {
+                      const next = new Set(prev);
+                      next.has(user.id) ? next.delete(user.id) : next.add(user.id);
+                      return next;
+                    })}
+                    className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    {revealedPasswords.has(user.id) ? <EyeOff size={13} /> : <Eye size={13} />}
+                  </button>
+                )}
+              </div>
               
               <div className="space-y-2 mt-4 pt-4 border-t border-slate-50">
                 <div className="flex justify-between items-center">
@@ -224,12 +252,20 @@ const UsersView: React.FC = () => {
                   </div>
                 </div>
 
-                {!formData.id && (
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Initial Password</label>
-                    <input type="text" required value={formData.password_hash} onChange={e => setFormData({...formData, password_hash: e.target.value})} className="w-full px-4 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Set temporary password" />
-                  </div>
-                )}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    {formData.id ? 'Reset Password' : 'Initial Password'}
+                    {formData.id && <span className="ml-1 text-slate-400 normal-case font-normal text-[11px]">(leave blank to keep current)</span>}
+                  </label>
+                  <input
+                    type="text"
+                    required={!formData.id}
+                    value={formData.id ? resetPassword : (formData.password_hash || '')}
+                    onChange={e => formData.id ? setResetPassword(e.target.value) : setFormData({...formData, password_hash: e.target.value})}
+                    className="w-full px-4 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20"
+                    placeholder={formData.id ? 'New password (optional)...' : 'Set temporary password'}
+                  />
+                </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">User Type</label>

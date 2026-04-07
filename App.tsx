@@ -18,8 +18,10 @@ import {
   ChevronLeft,
   ChevronRight,
   DollarSign,
-  Zap
+  Zap,
+  Lock
 } from 'lucide-react';
+import bcrypt from 'bcryptjs';
 import { User, PagePermissions } from './types';
 import { supabase } from './lib/supabase';
 import Login from './views/Login';
@@ -61,6 +63,10 @@ const App: React.FC = () => {
   });
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
   const [showDateModal, setShowDateModal] = useState(false);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [changePwForm, setChangePwForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [changePwError, setChangePwError] = useState('');
+  const [changePwLoading, setChangePwLoading] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem('taskronize_user');
@@ -84,6 +90,40 @@ const App: React.FC = () => {
   const logout = () => {
     setUser(null);
     localStorage.removeItem('taskronize_user');
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (changePwForm.newPassword !== changePwForm.confirmPassword) {
+      setChangePwError('New passwords do not match.');
+      return;
+    }
+    setChangePwLoading(true);
+    setChangePwError('');
+    try {
+      const currentHash = user!.password_hash;
+      let isValid = false;
+      if (currentHash?.startsWith('$2a$') || currentHash?.startsWith('$2b$')) {
+        isValid = await bcrypt.compare(changePwForm.currentPassword, currentHash);
+      } else {
+        isValid = changePwForm.currentPassword === currentHash;
+      }
+      if (!isValid) {
+        setChangePwError('Current password is incorrect.');
+        return;
+      }
+      await supabase.from('users').update({ password_hash: changePwForm.newPassword }).eq('id', user!.id);
+      const updatedUser = { ...user!, password_hash: changePwForm.newPassword };
+      setUser(updatedUser);
+      localStorage.setItem('taskronize_user', JSON.stringify(updatedUser));
+      setShowChangePasswordModal(false);
+      setChangePwForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      alert('Password changed successfully.');
+    } catch (err: any) {
+      setChangePwError(err.message || 'An error occurred.');
+    } finally {
+      setChangePwLoading(false);
+    }
   };
 
   const canAccess = (page: keyof PagePermissions) => {
@@ -228,7 +268,14 @@ const App: React.FC = () => {
                 </div>
               )}
             </div>
-            <button 
+            <button
+              onClick={() => { setChangePwForm({ currentPassword: '', newPassword: '', confirmPassword: '' }); setChangePwError(''); setShowChangePasswordModal(true); }}
+              className={`w-full flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-blue-600 font-bold transition-all text-sm ${!sidebarOpen && 'justify-center'}`}
+            >
+              <Lock size={18} />
+              {sidebarOpen && <span>Change Password</span>}
+            </button>
+            <button
               onClick={logout}
               className={`w-full flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-red-500 font-bold transition-all text-sm ${!sidebarOpen && 'justify-center'}`}
             >
@@ -299,6 +346,43 @@ const App: React.FC = () => {
           />
         </div>
       </Modal>
+
+      {showChangePasswordModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2">
+                <Lock className="text-blue-600" size={20} />
+                <h3 className="font-bold text-slate-800">Change Password</h3>
+              </div>
+              <button onClick={() => setShowChangePasswordModal(false)} className="p-1 hover:bg-slate-200 rounded-lg"><X size={20} /></button>
+            </div>
+            <form onSubmit={handleChangePassword} className="p-6 space-y-4">
+              {changePwError && (
+                <div className="bg-red-50 text-red-600 p-3 rounded-xl text-sm font-medium border border-red-100">{changePwError}</div>
+              )}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Current Password</label>
+                <input type="password" required value={changePwForm.currentPassword} onChange={e => setChangePwForm({ ...changePwForm, currentPassword: e.target.value })} className="w-full px-4 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="••••••••" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">New Password</label>
+                <input type="password" required value={changePwForm.newPassword} onChange={e => setChangePwForm({ ...changePwForm, newPassword: e.target.value })} className="w-full px-4 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="••••••••" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Confirm New Password</label>
+                <input type="password" required value={changePwForm.confirmPassword} onChange={e => setChangePwForm({ ...changePwForm, confirmPassword: e.target.value })} className="w-full px-4 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="••••••••" />
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => setShowChangePasswordModal(false)} className="flex-1 py-3 px-4 rounded-xl border border-slate-200 text-slate-600 font-bold">Cancel</button>
+                <button type="submit" disabled={changePwLoading} className="flex-1 py-3 px-4 rounded-xl bg-slate-900 text-white font-bold hover:bg-slate-800 transition-all disabled:opacity-50">
+                  {changePwLoading ? 'Saving...' : 'Update Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </AuthContext.Provider>
   );
 };
