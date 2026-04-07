@@ -695,8 +695,70 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
 
+  const paymentsSummary = useMemo(() => {
+    const teamPool = combinedAuditPool.filter(p => p.type === 'team') as any[];
+    const partnersOwed = teamPool
+      .filter(p => p.member.role === 'Partner')
+      .reduce((s: number, p: any) => s + p.totalOwed, 0);
+    const teamOwed = teamPool
+      .filter(p => p.member.role !== 'Partner')
+      .reduce((s: number, p: any) => s + p.totalOwed, 0);
+
+    const inRange = (date: string) =>
+      (!globalStart || date >= globalStart) && (!globalEnd || date <= globalEnd);
+
+    const partnersSettled = payments
+      .filter(p => p.payment_type === 'partner' && inRange(p.date))
+      .reduce((s, p) => s + Number(p.total_amount), 0);
+    const teamSettled = payments
+      .filter(p => p.payment_type === 'developer' && inRange(p.date))
+      .reduce((s, p) => s + Number(p.total_amount), 0);
+
+    return { partnersOwed, teamOwed, partnersSettled, teamSettled };
+  }, [combinedAuditPool, payments, globalStart, globalEnd]);
+
   return (
     <div className="space-y-12 pb-32 animate-in fade-in">
+      {/* Summary Card */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">
+            Total Outstanding
+          </p>
+          <p className="text-3xl font-black text-gray-900 mb-4">
+            {formatCurrency(paymentsSummary.partnersOwed + paymentsSummary.teamOwed)}
+          </p>
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Partners</span>
+              <span className="font-bold text-gray-700">{formatCurrency(paymentsSummary.partnersOwed)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Team production</span>
+              <span className="font-bold text-gray-700">{formatCurrency(paymentsSummary.teamOwed)}</span>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">
+            Total Settled This Period
+          </p>
+          <p className="text-3xl font-black text-emerald-600 mb-4">
+            {formatCurrency(paymentsSummary.partnersSettled + paymentsSummary.teamSettled)}
+          </p>
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Partners</span>
+              <span className="font-bold text-emerald-600">{formatCurrency(paymentsSummary.partnersSettled)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Team production</span>
+              <span className="font-bold text-emerald-600">{formatCurrency(paymentsSummary.teamSettled)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-3xl font-extrabold text-gray-900 tracking-tight">Authorization Panel</h2>
