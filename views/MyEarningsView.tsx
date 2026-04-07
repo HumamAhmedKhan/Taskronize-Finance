@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db, supabase } from '../lib/supabase';
 import { Project, ProjectAllocation, IncomeStream, Revenue, TeamMember, User, Expense } from '../types';
+import { extractPaidIds } from '../utils/calculations';
 import { DollarSign, Clock, CheckCircle2, Receipt } from 'lucide-react';
 import Table from '../components/Table';
 
@@ -71,7 +72,7 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
   // ─── TEAM MEMBER VIEW ────────────────────────────────────────────────────────
   if (currentUser.user_type === 'team_member') {
     const myAllocations = allocations.filter(a => a.team_member_id === teamMember?.id);
-    const myPayments = payments.filter(p => p.recipient_id === teamMember?.id);
+    const myPayments = payments.filter(p => Number(p.recipient_id) === Number(teamMember?.id));
 
     const currentMonthAllocations = myAllocations.filter(a => {
       const p = projects.find(proj => proj.id === a.project_id);
@@ -81,17 +82,18 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
     const currentMonthPayments = myPayments.filter(p => p.date >= globalStart && p.date <= globalEnd);
 
     const totalAllocatedThisMonth = currentMonthAllocations.reduce((sum, a) => sum + Number(a.amount || 0), 0);
-    const totalPaidThisMonth = currentMonthPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const totalPaidThisMonth = currentMonthPayments.reduce((sum, p) => sum + Number(p.total_amount || 0), 0);
     const totalAllocatedAllTime = myAllocations.reduce((sum, a) => sum + Number(a.amount || 0), 0);
-    const totalPaidAllTime = myPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const totalPaidAllTime = myPayments.reduce((sum, p) => sum + Number(p.total_amount || 0), 0);
     const pendingBalance = totalAllocatedAllTime - totalPaidAllTime;
 
     const tableData = currentMonthAllocations.map(alloc => {
       const project = projects.find(p => p.id === alloc.project_id);
-      const isPaid = myPayments.some(p =>
-        p.paid_revenue_commission_ids?.includes(`ALLOC_${alloc.id}`) ||
-        p.notes?.includes(`Alloc: ${alloc.id}`)
-      );
+      const isPaid = myPayments.some(p => {
+        const ids = extractPaidIds(p);
+        return ids.some(id => String(id) === `ALLOC_${alloc.id}`) ||
+          p.notes?.includes(`Alloc: ${alloc.id}`);
+      });
       const amountPaid = isPaid ? Number(alloc.amount || 0) : 0;
       return {
         id: alloc.id,

@@ -37,6 +37,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
   const [allLinks, setAllLinks] = useState<{ project_id: number; revenue_id: number }[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [paymentRows, setPaymentRows] = useState<any[]>([]);
+  const [otherPayments, setOtherPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -59,7 +60,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
   const loadData = async () => {
     setLoading(true);
     try {
-      const [projData, streamData, revData, linksData, teamData, allocData, payData, payRowsData] = await Promise.all([
+      const [projData, streamData, revData, linksData, teamData, allocData, payData, payRowsData, otherPayData] = await Promise.all([
         supabase.from('projects').select('*').gte('date', globalStart).lte('date', globalEnd).order('date', { ascending: false }).order('created_at', { ascending: false }),
         db.get<IncomeStream>('income_streams'),
         db.get<Revenue>('revenues'),
@@ -67,7 +68,8 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         db.get<TeamMember>('team_members'),
         db.get<ProjectAllocation>('project_allocations'),
         db.get<any>('production_payments'),
-        db.get<any>('payment_project_rows')
+        db.get<any>('payment_project_rows'),
+        supabase.from('other_payments').select('*')
       ]);
       
       let filteredProjects = projData.data || [];
@@ -94,16 +96,20 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
       setAllocations(allocData);
       setPayments(payData || []);
       setPaymentRows(payRowsData || []);
+      setOtherPayments(otherPayData.data || []);
     } catch (err) { console.error(err); } finally { setLoading(false); }
   };
 
   useEffect(() => { loadData(); }, [globalStart, globalEnd]);
 
-  const handleEdit = (p: Project) => {
+  const handleEdit = async (p: Project) => {
     setEditingId(p.id);
     setFormData(p);
-    // Important: Get current allocations from the fresh database state
-    setFormAllocations(allocations.filter(a => a.project_id === p.id));
+    const { data: freshAllocs } = await supabase
+      .from('project_allocations')
+      .select('*')
+      .eq('project_id', p.id);
+    setFormAllocations(freshAllocs || []);
     setFormLinks(allLinks.filter(l => l.project_id === p.id).map(l => l.revenue_id));
     setShowModal(true);
   };
@@ -137,7 +143,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         await supabase.from('project_allocations').delete().eq('project_id', projectId);
         await supabase.from('project_revenue_links').delete().eq('project_id', projectId);
       } else {
-        const newProj = await db.insert<Project>('projects', payload as any);
+        const newProj = await db.insert<Project>('projects', { ...payload, folders_creating: true });
         projectId = newProj.id;
       }
 
@@ -215,7 +221,8 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         client_name: item.client_name,
         project_value: isNaN(val) ? 0 : val,
         project_description: item.project_description || '',
-        income_stream_id: finalStreamId
+        income_stream_id: finalStreamId,
+        folders_creating: true
       };
     });
 
@@ -559,23 +566,20 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
                   if (!rule) return <p className="text-xs text-slate-500">No commission rule found for your account on this stream.</p>;
 
                   const grossCommission = (formData.project_value || 0) * (rule.value / 100);
-                  
-                  // Connects deduction logic
-                  const connectsDeduction = rule.deductConnects ? ((formData.project_value || 0) * 0.1) : 0; // Assuming 10% or similar? Wait, how is connects calculated? Let's just put 0 for now if not specified, or maybe it's a fixed amount? The user said "only if deduct connects is checked". I'll need to calculate it properly if there's a connects cost, but there's no connects cost field on project. Let's just show the logic.
-                  
-                  // Production cost deduction
+
+                  // Production cost deduction only — connects deduction removed (no per-project connects cost field)
                   const totalProductionCost = formAllocations.reduce((sum, a) => sum + Number(a.amount || 0), 0);
                   const productionDeduction = rule.deductProduction ? totalProductionCost : 0;
 
-                  const netCommission = grossCommission - connectsDeduction - productionDeduction;
-                  
-                  // Amount paid
+                  const netCommission = grossCommission - productionDeduction;
+
+                  // Amount paid to partner for this specific project
                   const partnerPayments = payments.filter(p => p.recipient_id === partnerMember?.id);
                   const partnerPaymentIds = partnerPayments.map(p => p.id);
                   const amountPaid = paymentRows
                     .filter(pr => pr.project_id === formData.id && partnerPaymentIds.includes(pr.payment_id))
                     .reduce((sum, pr) => sum + Number(pr.amount || 0), 0);
-                    
+
                   const pendingBalance = netCommission - amountPaid;
 
                   return (
@@ -584,13 +588,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
                         <span className="text-slate-500">Gross Commission ({rule.value}%)</span>
                         <span className="font-bold text-slate-900">{formatCurrency(grossCommission)}</span>
                       </div>
-                      {rule.deductConnects && (
-                        <div className="flex justify-between text-xs text-rose-500">
-                          <span>Connects Deduction</span>
-                          <span>- {formatCurrency(connectsDeduction)}</span>
-                        </div>
-                      )}
-                      {rule.deductProduction && (
+                      {rule.deductProduction && productionDeduction > 0 && (
                         <div className="flex justify-between text-xs text-rose-500">
                           <span>Production Cost Deduction</span>
                           <span>- {formatCurrency(productionDeduction)}</span>
@@ -612,6 +610,122 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
                   );
                 })()}
               </div>
+
+              {/* Team Breakdown */}
+              {formAllocations.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Team Breakdown</h4>
+                  <div className="rounded-xl border border-slate-100 overflow-hidden">
+                    {/* Header row */}
+                    <div className="grid grid-cols-3 px-4 py-2 bg-slate-50 border-b border-slate-100">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Member</span>
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Allocated</span>
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Paid</span>
+                    </div>
+
+                    {(() => {
+                      const visibleAllocs = formAllocations.filter(a => Number(a.amount || 0) > 0);
+                      return visibleAllocs.map((alloc, idx) => {
+                      const member = teamMembers.find(m => m.id === alloc.team_member_id);
+                      if (!member) return null;
+
+                      const memberPaymentIds = payments
+                        .filter(p => p.recipient_id === member.id)
+                        .map(p => p.id);
+                      const paidAmount = paymentRows
+                        .filter(pr => pr.project_id === formData.id && memberPaymentIds.includes(pr.payment_id))
+                        .reduce((sum, pr) => sum + Number(pr.amount || 0), 0);
+
+                      const allocated = Number(alloc.amount || 0);
+                      const fullyPaid = allocated > 0 && paidAmount >= allocated;
+
+                      return (
+                        <div key={idx} className={`grid grid-cols-3 px-4 py-3 items-center bg-white ${idx < visibleAllocs.length - 1 ? 'border-b border-slate-50' : ''}`}>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-black shrink-0 ${getAvatarColor(member.name)}`}>
+                              {getInitials(member.name)}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-slate-800 leading-none truncate">{member.name}</p>
+                              <p className="text-[10px] text-slate-400 mt-0.5">{alloc.role || member.role}</p>
+                            </div>
+                          </div>
+                          <span className="text-xs font-bold text-slate-700 text-right">{formatCurrency(allocated)}</span>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <span className={`text-xs font-bold ${fullyPaid ? 'text-emerald-600' : paidAmount > 0 ? 'text-amber-600' : 'text-slate-500'}`}>
+                              {formatCurrency(paidAmount)}
+                            </span>
+                            {fullyPaid
+                              ? <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full whitespace-nowrap">✓ PAID</span>
+                              : <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full whitespace-nowrap">⏳ DUE</span>
+                            }
+                          </div>
+                        </div>
+                      );
+                      });
+                    })()}
+
+                    {/* Totals row — only shown when >1 member */}
+                    {(() => {
+                      const visibleAllocs = formAllocations.filter(a => Number(a.amount || 0) > 0);
+                      return visibleAllocs.length > 1 && (() => {
+                      const totalAllocated = visibleAllocs.reduce((sum, a) => sum + Number(a.amount || 0), 0);
+                      const totalPaid = visibleAllocs.reduce((sum, alloc) => {
+                        const member = teamMembers.find(m => m.id === alloc.team_member_id);
+                        if (!member) return sum;
+                        const memberPaymentIds = payments.filter(p => p.recipient_id === member.id).map(p => p.id);
+                        return sum + paymentRows
+                          .filter(pr => pr.project_id === formData.id && memberPaymentIds.includes(pr.payment_id))
+                          .reduce((s, pr) => s + Number(pr.amount || 0), 0);
+                      }, 0);
+                      return (
+                        <div className="grid grid-cols-3 px-4 py-2.5 bg-slate-50 border-t border-slate-200">
+                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Total</span>
+                          <span className="text-xs font-black text-slate-800 text-right">{formatCurrency(totalAllocated)}</span>
+                          <span className="text-xs font-black text-slate-800 text-right">{formatCurrency(totalPaid)}</span>
+                        </div>
+                      );
+                    })();
+                    })()}
+                  </div>
+                </div>
+              )}
+
+              {/* Other Payments — non-project-specific payments to team members on this project */}
+              {(() => {
+                const memberIds = new Set(formAllocations.map(a => a.team_member_id));
+                const relevant = otherPayments.filter(op => op.recipient_id != null && memberIds.has(op.recipient_id) && op.is_paid === true);
+                if (relevant.length === 0) return null;
+                return (
+                  <div className="space-y-2">
+                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Other Payments</h4>
+                    <div className="rounded-xl border border-slate-100 overflow-hidden">
+                      <div className="grid grid-cols-3 px-4 py-2 bg-slate-50 border-b border-slate-100">
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Member</span>
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Description</span>
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Amount</span>
+                      </div>
+                      {relevant.map((op, idx) => {
+                        const member = teamMembers.find(m => m.id === op.recipient_id);
+                        return (
+                          <div key={op.id} className={`grid grid-cols-3 px-4 py-3 items-center bg-white ${idx < relevant.length - 1 ? 'border-b border-slate-50' : ''}`}>
+                            <div className="flex items-center gap-2 min-w-0">
+                              {member && (
+                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-black shrink-0 ${getAvatarColor(member.name)}`}>
+                                  {getInitials(member.name)}
+                                </div>
+                              )}
+                              <p className="text-xs font-semibold text-slate-800 leading-none truncate">{op.recipient_name || member?.name}</p>
+                            </div>
+                            <span className="text-xs text-slate-500 truncate">{op.description}</span>
+                            <span className="text-xs font-bold text-slate-700 text-right">{formatCurrency(Number(op.amount || 0))}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>

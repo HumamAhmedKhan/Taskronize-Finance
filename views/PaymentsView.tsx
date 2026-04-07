@@ -2,15 +2,16 @@
 import React, { useState, useEffect, useMemo, useContext } from 'react';
 import { supabase, db } from '../lib/supabase';
 import { TeamMember, Project, ProjectAllocation, Revenue, IncomeStream, ProductionPayment, OtherPayment, Expense, FinancialGoal } from '../types';
-import { calculateRevenueDetails } from '../utils/calculations';
+import { calculateRevenueDetails, extractPaidIds } from '../utils/calculations';
 import SearchableSelect from '../components/SearchableSelect';
 import Modal from '../components/Modal';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 import { 
-  History, 
+  History,
   ArrowUpCircle,
   Plus,
+  Minus,
   Coins,
   Trash2,
   X,
@@ -30,24 +31,6 @@ interface PaymentsViewProps {
   globalEnd: string;
 }
 
-// Reliably extracts paid IDs from a payment, checking both the array column
-// and the notes field (JSON embedded as fallback for DBs that don't persist text[])
-const extractPaidIds = (p: { paid_revenue_commission_ids?: string[] | null; notes?: string | null }): string[] => {
-  // 1. Try the array column first
-  const ids = p.paid_revenue_commission_ids;
-  if (Array.isArray(ids) && ids.length > 0) return ids.map(String);
-  if (typeof ids === 'string' && ids.length > 0) {
-    try { const parsed = JSON.parse(ids); if (Array.isArray(parsed)) return parsed.map(String); } catch {}
-    // PostgreSQL array notation: {ALLOC_1,ALLOC_2}
-    if (ids.startsWith('{')) return ids.slice(1, -1).split(',').map(s => s.trim().replace(/^"|"$/g, ''));
-  }
-  // 2. Fall back to notes field: looks for PaidIDs:[...]
-  if (p.notes) {
-    const match = p.notes.match(/PaidIDs:(\[.*?\])/);
-    if (match) { try { const parsed = JSON.parse(match[1]); if (Array.isArray(parsed)) return parsed.map(String); } catch {} }
-  }
-  return [];
-};
 
 const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) => {
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
@@ -257,9 +240,9 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
           }
       });
 
-      const totalGross = unpaidCommissions.reduce((s, c) => s + c.grossShareValue, 0) + 
+      const totalGross = unpaidCommissions.reduce((s, c) => s + c.grossShareValue, 0) +
                         unpaidAllocs.reduce((s, a) => s + a.amount, 0) +
-                        unpaidOthers.reduce((s, o) => s + o.amount, 0);
+                        unpaidOthers.reduce((s, o) => s + (o.category === 'deduction' ? -o.amount : o.amount), 0);
       
       const totalOwed = Math.max(0, totalGross - cardConnectsDeduction - cardProductionDeduction);
 
@@ -283,9 +266,9 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
   }, [teamMembers, allocations, projects, revenues, incomeStreams, payments, otherPayments, goals, globalStart, globalEnd, expenses, projectRevenueLinks]);
 
   const auditCalculation = useMemo(() => {
-    if (!selectedMember) return { revShareGross: 0, otherAdditions: 0, connectsTotal: 0, prodTotal: 0, grossTotal: 0, payable: 0, deductionItems: [] };
+    if (!selectedMember) return { revShareGross: 0, otherAdditions: 0, connectsTotal: 0, prodTotal: 0, manualDeductions: 0, grossTotal: 0, payable: 0, deductionItems: [] };
     const pool = combinedAuditPool.find(p => p.type === 'team' && p.member.id === selectedMember.id) as any;
-    if (!pool) return { revShareGross: 0, otherAdditions: 0, connectsTotal: 0, prodTotal: 0, grossTotal: 0, payable: 0, deductionItems: [] };
+    if (!pool) return { revShareGross: 0, otherAdditions: 0, connectsTotal: 0, prodTotal: 0, manualDeductions: 0, grossTotal: 0, payable: 0, deductionItems: [] };
     
     let revShareGross = 0;
     let connectsTotal = 0;
@@ -361,13 +344,17 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
     });
 
     let otherAdditions = 0;
-    pool.unpaidOthers.filter((o: any) => selectedOtherIds.includes(o.id)).forEach((o: any) => otherAdditions += o.amount);
+    let manualDeductions = 0;
+    pool.unpaidOthers.filter((o: any) => selectedOtherIds.includes(o.id)).forEach((o: any) => {
+      if (o.category === 'deduction') manualDeductions += o.amount;
+      else otherAdditions += o.amount;
+    });
     pool.unpaidAllocs.filter((a: any) => selectedAllocIds.includes(a.id)).forEach((a: any) => otherAdditions += a.amount);
-    
+
     const grossTotal = revShareGross + otherAdditions;
-    const payable = Math.max(0, grossTotal - connectsTotal - prodTotal);
+    const payable = Math.max(0, grossTotal - connectsTotal - prodTotal - manualDeductions);
     
-    return { revShareGross, otherAdditions, connectsTotal, prodTotal, grossTotal, payable, deductionItems };
+    return { revShareGross, otherAdditions, connectsTotal, prodTotal, manualDeductions, grossTotal, payable, deductionItems };
   }, [selectedMember, selectedRevenueKeys, selectedOtherIds, selectedAllocIds, combinedAuditPool, revenues, incomeStreams, expenses, allocations, projectRevenueLinks, projects]);
 
   const reportData = useMemo(() => {
@@ -400,7 +387,9 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
             });
           }
         } else if (key.includes('-')) {
-          const [revId, memberName] = key.split('-');
+          const dashIdx = key.indexOf('-');
+          const revId = key.slice(0, dashIdx);
+          const memberName = key.slice(dashIdx + 1);
           const rev = revenues.find(r => String(r.id) === revId);
           if (rev) {
             const stream = incomeStreams.find(s => s.id === rev.income_stream_id);
@@ -487,10 +476,11 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
       ...settledAllocs
     ];
 
-    const otherAdditions = combinedOthers.reduce((s, o) => s + Number(o.amount), 0);
+    const otherAdditions = combinedOthers.reduce((s, o) => s + (o.category === 'deduction' ? 0 : Number(o.amount)), 0);
+    const manualDeductions = combinedOthers.reduce((s, o) => s + (o.category === 'deduction' ? Number(o.amount) : 0), 0);
     const productionDeduction = connectsTotal + prodTotal;
-    
-    const netAmountDue = grossCommissions + otherAdditions - productionDeduction;
+
+    const netAmountDue = grossCommissions + otherAdditions - productionDeduction - manualDeductions;
 
     return {
       recipient: viewingPayment.recipient_name,
@@ -712,15 +702,26 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
           <h2 className="text-3xl font-extrabold text-gray-900 tracking-tight">Authorization Panel</h2>
           <p className="text-gray-500 font-medium text-sm">Verify audits and release funds for team payables and wealth goals.</p>
         </div>
-        <button 
-          onClick={() => {
-            setOtherFormData({ date: new Date().toISOString().split('T')[0], category: 'bonus', amount: 0, description: '', recipient_id: undefined, recipient_type: 'team' });
-            setShowOtherModal(true);
-          }}
-          className="flex items-center gap-2 bg-gray-900 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all"
-        >
-          <Plus size={16} /> Log Adjustment
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              setOtherFormData({ date: new Date().toISOString().split('T')[0], category: 'deduction', amount: 0, description: '', recipient_id: undefined, recipient_type: 'team' });
+              setShowOtherModal(true);
+            }}
+            className="flex items-center gap-2 bg-rose-600 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+          >
+            <Minus size={16} /> Log Deduction
+          </button>
+          <button
+            onClick={() => {
+              setOtherFormData({ date: new Date().toISOString().split('T')[0], category: 'bonus', amount: 0, description: '', recipient_id: undefined, recipient_type: 'team' });
+              setShowOtherModal(true);
+            }}
+            className="flex items-center gap-2 bg-gray-900 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+          >
+            <Plus size={16} /> Log Adjustment
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -853,33 +854,65 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
               </div>
             )}
 
-            {(combinedAuditPool.find(p => p.type === 'team' && p.member.id === selectedMember.id) as any)?.unpaidOthers.length > 0 && (
-              <div className="space-y-3">
-                <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Other Outstanding (Bonus/Adv)</h5>
-                <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1 scrollbar-hide">
-                  {(combinedAuditPool.find(p => p.type === 'team' && p.member.id === selectedMember.id) as any)?.unpaidOthers.map((o: any) => (
-                    <div key={o.id} className={`flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${selectedOtherIds.includes(o.id) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-gray-50 border-transparent hover:border-gray-200'}`}>
-                      <label className="flex items-center gap-3 cursor-pointer flex-1">
-                        <input type="checkbox" checked={selectedOtherIds.includes(o.id)} onChange={() => {
-                          if (selectedOtherIds.includes(o.id)) setSelectedOtherIds(selectedOtherIds.filter(i => i !== o.id));
-                          else setSelectedOtherIds([...selectedOtherIds, o.id]);
-                        }} className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
-                        <div>
-                          <span className="text-xs font-bold text-gray-900 block">{o.description}</span>
-                          <span className="text-[9px] text-gray-400 font-bold uppercase">{o.date} • {o.category}</span>
-                        </div>
-                      </label>
-                      <div className="flex items-center gap-4">
-                        <span className="text-xs font-black text-gray-900">{formatCurrency(o.amount)}</span>
-                        <button onClick={() => handleDeleteOther(o.id)} className="p-1 text-rose-300 hover:text-rose-500 transition-colors">
-                          <Trash2 size={14} />
-                        </button>
+            {(() => {
+              const pool = combinedAuditPool.find(p => p.type === 'team' && p.member.id === selectedMember.id) as any;
+              const additions = pool?.unpaidOthers.filter((o: any) => o.category !== 'deduction') || [];
+              const deductions = pool?.unpaidOthers.filter((o: any) => o.category === 'deduction') || [];
+              return (
+                <>
+                  {additions.length > 0 && (
+                    <div className="space-y-3">
+                      <h5 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Other Outstanding (Bonus/Adv)</h5>
+                      <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1 scrollbar-hide">
+                        {additions.map((o: any) => (
+                          <div key={o.id} className={`flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${selectedOtherIds.includes(o.id) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-gray-50 border-transparent hover:border-gray-200'}`}>
+                            <label className="flex items-center gap-3 cursor-pointer flex-1">
+                              <input type="checkbox" checked={selectedOtherIds.includes(o.id)} onChange={() => {
+                                if (selectedOtherIds.includes(o.id)) setSelectedOtherIds(selectedOtherIds.filter(i => i !== o.id));
+                                else setSelectedOtherIds([...selectedOtherIds, o.id]);
+                              }} className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+                              <div>
+                                <span className="text-xs font-bold text-gray-900 block">{o.description}</span>
+                                <span className="text-[9px] text-gray-400 font-bold uppercase">{o.date} • {o.category}</span>
+                              </div>
+                            </label>
+                            <div className="flex items-center gap-4">
+                              <span className="text-xs font-black text-gray-900">{formatCurrency(o.amount)}</span>
+                              <button onClick={() => handleDeleteOther(o.id)} className="p-1 text-rose-300 hover:text-rose-500 transition-colors"><Trash2 size={14} /></button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
+                  )}
+                  {deductions.length > 0 && (
+                    <div className="space-y-3">
+                      <h5 className="text-[10px] font-black text-rose-400 uppercase tracking-widest px-1">Pending Deductions</h5>
+                      <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1 scrollbar-hide">
+                        {deductions.map((o: any) => (
+                          <div key={o.id} className={`flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${selectedOtherIds.includes(o.id) ? 'bg-rose-50 border-rose-200 shadow-sm' : 'bg-rose-50/40 border-rose-100 hover:border-rose-200'}`}>
+                            <label className="flex items-center gap-3 cursor-pointer flex-1">
+                              <input type="checkbox" checked={selectedOtherIds.includes(o.id)} onChange={() => {
+                                if (selectedOtherIds.includes(o.id)) setSelectedOtherIds(selectedOtherIds.filter(i => i !== o.id));
+                                else setSelectedOtherIds([...selectedOtherIds, o.id]);
+                              }} className="w-4 h-4 rounded border-rose-300 text-rose-600 focus:ring-rose-500" />
+                              <div>
+                                <span className="text-xs font-bold text-rose-800 block">{o.description}</span>
+                                <span className="text-[9px] text-rose-400 font-bold uppercase">{o.date} • Deduction</span>
+                              </div>
+                            </label>
+                            <div className="flex items-center gap-4">
+                              <span className="text-xs font-black text-rose-600">-{formatCurrency(o.amount)}</span>
+                              <button onClick={() => handleDeleteOther(o.id)} className="p-1 text-rose-300 hover:text-rose-500 transition-colors"><Trash2 size={14} /></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             <div className="bg-slate-50 rounded-[32px] p-8 border border-gray-100 space-y-4">
               <div className="space-y-2 text-sm">
@@ -895,6 +928,15 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
                         <span className="font-bold">-{formatCurrency(item.amount)}</span>
                       </div>
                     ))}
+                  </div>
+                )}
+                {auditCalculation.manualDeductions > 0 && (
+                  <div className="pt-2 space-y-1">
+                    <p className="text-[10px] font-black text-rose-400 uppercase tracking-widest">Manual Deductions</p>
+                    <div className="flex justify-between items-center text-rose-500 font-medium italic text-xs">
+                      <span>• Selected deduction items</span>
+                      <span className="font-bold">-{formatCurrency(auditCalculation.manualDeductions)}</span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1052,14 +1094,25 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
 
       {/* ... (Other Modals and Layout remain same) ... */}
       {showOtherModal && (
-        <Modal title="Record Other Payment Item" isOpen={showOtherModal} onClose={() => setShowOtherModal(false)} onSave={handleSaveOther} saveLabel="Save">
+        <Modal
+          title={otherFormData.category === 'deduction' ? 'Log Deduction' : 'Record Other Payment Item'}
+          isOpen={showOtherModal}
+          onClose={() => setShowOtherModal(false)}
+          onSave={handleSaveOther}
+          saveLabel="Save"
+        >
           <div className="space-y-6">
+            {otherFormData.category === 'deduction' && (
+              <div className="px-4 py-3 bg-rose-50 border border-rose-100 rounded-xl text-xs font-bold text-rose-600">
+                This amount will be subtracted from the member's next settlement total.
+              </div>
+            )}
             <div className="space-y-2">
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Recipient</label>
-              <SearchableSelect 
-                options={teamMembers.map(m => ({ value: m.id, label: `${m.name} (${m.role})` }))} 
-                value={otherFormData.recipient_id} 
-                onChange={val => setOtherFormData({...otherFormData, recipient_id: val})} 
+              <SearchableSelect
+                options={teamMembers.map(m => ({ value: m.id, label: `${m.name} (${m.role})` }))}
+                value={otherFormData.recipient_id}
+                onChange={val => setOtherFormData({...otherFormData, recipient_id: val})}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -1074,7 +1127,7 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Description</label>
-              <input type="text" value={otherFormData.description} onChange={e => setOtherFormData({...otherFormData, description: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold outline-none" placeholder="e.g., Performance Bonus, Advance..." />
+              <input type="text" value={otherFormData.description} onChange={e => setOtherFormData({...otherFormData, description: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold outline-none" placeholder={otherFormData.category === 'deduction' ? 'e.g., Tax deduction, Connects fee...' : 'e.g., Performance Bonus, Advance...'} />
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Category</label>
@@ -1082,6 +1135,7 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
                 <option value="bonus">Bonus</option>
                 <option value="advance">Advance</option>
                 <option value="refund">Refund</option>
+                <option value="deduction">Deduction</option>
                 <option value="other">Other</option>
               </select>
             </div>

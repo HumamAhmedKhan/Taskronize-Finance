@@ -15,6 +15,8 @@ export interface PagePermissions {
   backup: PermissionLevel;
   aiAdvisor: PermissionLevel;
   automations: PermissionLevel;
+  pmBulkEdit: PermissionLevel;
+  pmManageStatuses: PermissionLevel;
 }
 
 export interface User {
@@ -74,6 +76,12 @@ export interface Project {
   drive_folder_url: string | null;
   drive_client_folder_url: string | null;
   created_at: string;
+  pcb_doc_id: string | null;
+  project_brief_doc_id: string | null;
+  sensitive_doc_id: string | null;
+  dev_brief_doc_id: string | null;
+  brief_generated: boolean | null;
+  folders_creating: boolean | null;
 }
 
 export interface ProjectAllocation {
@@ -139,7 +147,7 @@ export interface OtherPayment {
   recipient_name: string;
   amount: number;
   description: string;
-  category: 'bonus' | 'advance' | 'refund' | 'other';
+  category: 'bonus' | 'advance' | 'refund' | 'deduction' | 'other';
   is_paid: boolean;
   settled_in_payment_id: number | null;
   created_at: string;

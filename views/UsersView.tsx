@@ -29,7 +29,9 @@ const UsersView: React.FC = () => {
       users: 'none',
       monthlyClosing: 'none',
       backup: 'none',
-      aiAdvisor: 'none'
+      aiAdvisor: 'none',
+      pmBulkEdit: 'none',
+      pmManageStatuses: 'none'
     }
   });
 
@@ -123,9 +125,16 @@ const UsersView: React.FC = () => {
 
   // Helper to ensure all possible permission keys are rendered even if missing in existing user objects
   const permissionKeys: (keyof PagePermissions)[] = [
-    'dashboard', 'aiAdvisor', 'revenue', 'projects', 'projectManagement', 'payments', 
+    'dashboard', 'aiAdvisor', 'revenue', 'projects', 'projectManagement', 'payments',
     'expenses', 'incomeStreams', 'team', 'users', 'monthlyClosing', 'backup'
   ];
+
+  const pmFeatureKeys: (keyof PagePermissions)[] = ['pmBulkEdit', 'pmManageStatuses'];
+
+  const pmFeatureLabels: Record<string, string> = {
+    pmBulkEdit: 'Bulk Edit Projects',
+    pmManageStatuses: 'Manage Statuses',
+  };
 
   return (
     <div className="space-y-6">
@@ -298,6 +307,37 @@ const UsersView: React.FC = () => {
                         </div>
                       </div>
                     ))}
+                  </div>
+
+                  {/* Project Management feature permissions */}
+                  <div className="mt-5">
+                    <h4 className="font-bold text-slate-700 text-sm mb-3 flex items-center gap-2">
+                      <Shield size={14} className="text-blue-500" />
+                      Project Management Features
+                    </h4>
+                    <div className="space-y-2">
+                      {pmFeatureKeys.map((key) => (
+                        <div key={key} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 bg-blue-50/50 border border-blue-100 rounded-xl gap-3">
+                          <span className="font-bold text-slate-700 text-sm">{pmFeatureLabels[key]}</span>
+                          <div className="flex gap-1.5">
+                            {(['full', 'none'] as PermissionLevel[]).map((level) => (
+                              <button
+                                key={level}
+                                type="button"
+                                onClick={() => updatePermission(key, level)}
+                                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all whitespace-nowrap ${
+                                  (formData.permissions?.[key] || 'none') === level
+                                    ? level === 'full' ? 'bg-green-600 text-white shadow-sm' : 'bg-slate-700 text-white shadow-sm'
+                                    : 'bg-white border border-slate-200 text-slate-400 hover:bg-slate-50'
+                                }`}
+                              >
+                                {level === 'full' ? 'Allowed' : 'Blocked'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>

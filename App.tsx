@@ -87,6 +87,7 @@ const App: React.FC = () => {
   };
 
   const canAccess = (page: keyof PagePermissions) => {
+    if (user?.user_type === 'partner' && page === 'revenue') return true;
     if (!user || !user.permissions) return false;
     let level = user.permissions[page];
     if (level === undefined && page === 'projectManagement') {
@@ -100,6 +101,7 @@ const App: React.FC = () => {
     if (page === 'dashboard') return user.permissions['dashboard'] !== 'none';
     if (page === 'automations') return user.user_type === 'admin';
     if (page === 'myEarnings') return user.user_type === 'partner' || user.user_type === 'team_member';
+    if (page === 'revenue' && user.user_type === 'partner') return true;
     let level = user.permissions[page];
     if (level === undefined && page === 'projectManagement') {
       level = user.permissions['projects'];

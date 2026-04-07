@@ -109,7 +109,25 @@ export function calculateRevenueDetails(
     netAfterPlatform, 
     commissions, 
     grossCommissions,
-    deductionsApplied, 
-    profit: Math.max(0, remaining) 
+    deductionsApplied,
+    profit: Math.max(0, remaining)
   };
 }
+
+/** Reliably extracts paid IDs from a payment record.
+ *  Checks the array column first, then falls back to PaidIDs:[...] embedded in notes.
+ */
+export function extractPaidIds(p: { paid_revenue_commission_ids?: any; notes?: string | null }): string[] {
+  const ids = p.paid_revenue_commission_ids;
+  if (Array.isArray(ids) && ids.length > 0) return ids.map(String);
+  if (typeof ids === 'string' && ids.length > 0) {
+    try { const parsed = JSON.parse(ids); if (Array.isArray(parsed)) return parsed.map(String); } catch {}
+    if (ids.startsWith('{')) return ids.slice(1, -1).split(',').map(s => s.trim().replace(/^"|"$/g, ''));
+  }
+  if (p.notes) {
+    const match = p.notes.match(/PaidIDs:(\[.*?\])/);
+    if (match) { try { const parsed = JSON.parse(match[1]); if (Array.isArray(parsed)) return parsed.map(String); } catch {} }
+  }
+  return [];
+}
+

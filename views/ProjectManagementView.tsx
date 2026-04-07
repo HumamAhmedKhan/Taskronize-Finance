@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, supabase } from '../lib/supabase';
 import { Project, IncomeStream, TeamMember, ProjectAllocation, User } from '../types';
-import { Search, Filter, Plus, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Flag, AlertCircle, TrendingUp, AlertTriangle, Rocket, MessageSquare, X, Calendar, Link as LinkIcon, Paperclip, AtSign, Send, CheckCircle2, Circle, History, Layers, Check, Edit2, Trash2, List, FolderOpen } from 'lucide-react';
+import { Search, Filter, Plus, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, AlertCircle, TrendingUp, AlertTriangle, Rocket, MessageSquare, X, Calendar, Link as LinkIcon, Paperclip, AtSign, Send, CheckCircle2, Circle, History, Layers, Check, Edit2, Trash2, List, FolderOpen } from 'lucide-react';
 import Modal from '../components/Modal';
 import RichTextEditor, { RichCommentContent } from '../components/RichTextEditor';
 
@@ -50,6 +50,7 @@ interface Subtask {
   id: string;
   title: string;
   completed: boolean;
+  start_date?: string;
   due_date?: string;
   assignee_id?: string;
 }
@@ -76,6 +77,12 @@ interface Tag {
   color: string;
 }
 
+interface CustomColumn {
+  id: string;
+  name: string;
+  options: { label: string; color: string }[];
+}
+
 interface ProjectManagementData {
   status: string;
   priority: string;
@@ -88,12 +95,14 @@ interface ProjectManagementData {
   subtasks: Subtask[];
   dependencies: number[];
   compliance_checklist: ChecklistItem[];
+  custom_fields?: Record<string, string>;
 }
 
 const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalStart, globalEnd, currentUser }) => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentView, setCurrentView] = useState<'list' | 'calendar' | 'gantt' | 'kanban'>('list');
-  const [ganttZoom, setGanttZoom] = useState<'day' | 'week' | 'month'>('month');
+  const [ganttZoom, setGanttZoom] = useState<'today' | 'day' | 'week' | 'month'>('month');
+  const [ganttExpanded, setGanttExpanded] = useState<Set<number>>(new Set());
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [expandedProjects, setExpandedProjects] = useState<Set<number>>(() => {
     try {
@@ -118,35 +127,11 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
   // Custom Statuses state
   const [statuses, setStatuses] = useState<{id: string, name: string, color: string}[]>([]);
 
-  useEffect(() => {
-    const loadStatuses = async () => {
-      try {
-        const { data, error } = await supabase.from('project_statuses').select('*').order('created_at', { ascending: true });
-        if (error) throw error;
-        console.log('[ProjectManagement] pipeline statuses loaded:', data);
-        if (data && data.length > 0) {
-          setStatuses(data);
-        } else {
-          // Fallback if table is empty
-          setStatuses([
-            { id: '1', name: 'Kickoff', color: 'bg-blue-100 text-blue-800' },
-            { id: '2', name: 'Web UI', color: 'bg-purple-100 text-purple-800' },
-            { id: '3', name: 'Development', color: 'bg-emerald-100 text-emerald-800' },
-            { id: '4', name: 'Completed', color: 'bg-gray-100 text-gray-800' }
-          ]);
-        }
-      } catch (err) {
-        console.error('Failed to load project_statuses from Supabase', err);
-        setStatuses([
-          { id: '1', name: 'Kickoff', color: 'bg-blue-100 text-blue-800' },
-          { id: '2', name: 'Web UI', color: 'bg-purple-100 text-purple-800' },
-          { id: '3', name: 'Development', color: 'bg-emerald-100 text-emerald-800' },
-          { id: '4', name: 'Completed', color: 'bg-gray-100 text-gray-800' }
-        ]);
-      }
-    };
-    loadStatuses();
-  }, []);
+  // Statuses are loaded inside loadData (below) so they're resolved before
+  // project rows are auto-created. This ref holds the resolved list so loadData
+  // can use it without depending on the statuses React state (which would be
+  // stale on first render).
+  const statusesRef = useRef<{id: string, name: string, color: string}[]>([]);
   
   // Modal state
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -170,7 +155,10 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
   const [newDependency, setNewDependency] = useState('');
   const [newChecklistItem, setNewChecklistItem] = useState('');
   const [showAssigneeDropdown, setShowAssigneeDropdown] = useState(false);
-  
+  const [dateError, setDateError] = useState('');
+
+  useEffect(() => { setDateError(''); }, [selectedProject]);
+
   // Status management state
   const [showPipelineModal, setShowPipelineModal] = useState(false);
   const [newPipelineName, setNewPipelineName] = useState('');
@@ -181,6 +169,11 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
   const [statusToDelete, setStatusToDelete] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   
+  // Brief generation state
+  const [briefGenerating, setBriefGenerating] = useState<Set<number>>(new Set());
+  const [briefToast, setBriefToast] = useState<string | null>(null);
+  const [isSavingMgmt, setIsSavingMgmt] = useState(false);
+
   // Bulk Edit state
   const [selectedProjectIds, setSelectedProjectIds] = useState<Set<number>>(new Set());
   const [isBulkMode, setIsBulkMode] = useState(false);
@@ -199,10 +192,69 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
   const [dividerPct, setDividerPct] = useState(60);
   const isDragging = useRef(false);
 
+  // Resizable column widths (persisted to localStorage)
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem('pm_colWidths');
+      return saved ? JSON.parse(saved) : { name: 280, tags: 120, assignee: 130, dueDate: 155, priority: 100, taskStatus: 130 };
+    } catch { return { name: 280, tags: 120, assignee: 130, dueDate: 155, priority: 100, taskStatus: 130 }; }
+  });
+  const resizingCol = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
+
+  // Custom columns
+  const [customColumns, setCustomColumns] = useState<CustomColumn[]>([]);
+  const [showCustomColModal, setShowCustomColModal] = useState(false);
+  const [customColForm, setCustomColForm] = useState<{ id: string | null; name: string; options: { label: string; color: string }[] }>({ id: null, name: '', options: [] });
+  const [customColNewLabel, setCustomColNewLabel] = useState('');
+  const [customColNewColor, setCustomColNewColor] = useState('#3b82f6');
+
+  // Inline dropdowns for status/priority/custom-column cells in list view
+  const [openStatusDropdown, setOpenStatusDropdown] = useState<number | null>(null);
+  const [openPriorityDropdown, setOpenPriorityDropdown] = useState<number | null>(null);
+  const [openCcDropdown, setOpenCcDropdown] = useState<{ projectId: number; colId: string } | null>(null);
+  // Inline add-new row state
+  const [addingToGroup, setAddingToGroup] = useState<string | null>(null);
+  const [newProjectName, setNewProjectName] = useState('');
+  // Column menu panel
+  const [showColumnMenu, setShowColumnMenu] = useState(false);
+  // Column order (persisted to localStorage)
+  const [colOrder, setColOrder] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('pm_colOrder');
+      return saved ? JSON.parse(saved) : ['name', 'tags', 'assignee', 'dueDate', 'priority', 'taskStatus'];
+    } catch { return ['name', 'tags', 'assignee', 'dueDate', 'priority', 'taskStatus']; }
+  });
+  const draggingColKey = useRef<string | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       try {
+        // Load statuses first so they are available when auto-creating project rows below.
+        const fallbackStatuses = [
+          { id: '1', name: 'Kickoff', color: 'bg-blue-100 text-blue-800' },
+          { id: '2', name: 'Web UI', color: 'bg-purple-100 text-purple-800' },
+          { id: '3', name: 'Development', color: 'bg-emerald-100 text-emerald-800' },
+          { id: '4', name: 'Completed', color: 'bg-gray-100 text-gray-800' }
+        ];
+        try {
+          const { data: statusData, error: statusError } = await supabase.from('project_statuses').select('*').order('created_at', { ascending: true });
+          if (statusError) throw statusError;
+          const resolved = (statusData && statusData.length > 0) ? statusData : fallbackStatuses;
+          statusesRef.current = resolved;
+          setStatuses(resolved);
+        } catch {
+          statusesRef.current = fallbackStatuses;
+          setStatuses(fallbackStatuses);
+        }
+
+        // Load custom columns (graceful fallback if table doesn't exist yet)
+        try {
+          const { data: colData } = await supabase.from('project_custom_columns').select('*').order('sort_order', { ascending: true });
+          if (colData) setCustomColumns(colData.map((c: any) => ({ id: c.id, name: c.name, options: c.options || [] })));
+        } catch { /* project_custom_columns table not yet created */ }
+
         const [projData, streamData, teamData, allocData] = await Promise.all([
           supabase.from('projects').select('*').order('date', { ascending: false }).order('created_at', { ascending: false }),
           db.get<IncomeStream>('income_streams'),
@@ -237,8 +289,6 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
           }
         }
 
-        console.log('[ProjectManagement] raw projects from Supabase:', projData.data);
-        console.log('[ProjectManagement] filtered projects after role check:', filteredProjects);
         setProjects(filteredProjects);
         setIncomeStreams(streamData || []);
         setTeamMembers(teamData || []);
@@ -259,7 +309,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
         const formattedData: Record<number, ProjectManagementData> = {};
         (mgmtResult.data || []).forEach((row: any) => {
           formattedData[row.project_id] = {
-            status: row.pipeline_status || 'Kickoff',
+            status: row.pipeline_status || statusesRef.current[0]?.name || 'Uncategorized',
             priority: row.priority || 'medium',
             start_date: row.start_date || '',
             due_date: row.due_date || '',
@@ -269,7 +319,8 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
             progress: row.progress || 0,
             subtasks: row.subtasks || [],
             dependencies: row.dependencies || [],
-            compliance_checklist: row.compliance_checklist || []
+            compliance_checklist: row.compliance_checklist || [],
+            custom_fields: row.custom_fields || {}
           };
         });
 
@@ -278,7 +329,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
         if (missingIds.length > 0) {
           const defaultRows = missingIds.map(p => ({
             project_id: p.id,
-            pipeline_status: 'Kickoff',
+            pipeline_status: statusesRef.current[0]?.name || 'Uncategorized',
             task_status: 'ToDo',
             priority: 'medium',
             start_date: p.date || null,
@@ -295,7 +346,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
           if (insertError) console.error('Failed to auto-create project_management rows:', insertError);
           missingIds.forEach(p => {
             formattedData[p.id] = {
-              status: 'Kickoff',
+              status: statusesRef.current[0]?.name || 'Uncategorized',
               priority: 'medium',
               start_date: p.date || '',
               due_date: '',
@@ -342,7 +393,8 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
       progress: mgmtData.progress,
       subtasks: mgmtData.subtasks,
       dependencies: mgmtData.dependencies,
-      compliance_checklist: mgmtData.compliance_checklist
+      compliance_checklist: mgmtData.compliance_checklist,
+      ...(mgmtData.custom_fields && Object.keys(mgmtData.custom_fields).length > 0 ? { custom_fields: mgmtData.custom_fields } : {})
     };
     try {
       const { data: updated, error: updateError } = await supabase
@@ -381,10 +433,25 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
   };
 
   const handleSaveManagementData = async () => {
-    if (!selectedProject) return;
-    
+    if (!selectedProject || isSavingMgmt) return;
+
+    const missingStart = !editData.start_date;
+    const missingDue = !editData.due_date;
+    if (missingStart && missingDue) {
+      setDateError('Please save both a start date and due date.');
+      return;
+    } else if (missingStart) {
+      setDateError('Please save a start date.');
+      return;
+    } else if (missingDue) {
+      setDateError('Please save a due date.');
+      return;
+    }
+    setDateError('');
+    setIsSavingMgmt(true);
+
     const existingData = managementData[selectedProject.id] || {
-      status: 'Kickoff',
+      status: statuses[0]?.name || 'Uncategorized',
       priority: 'medium',
       start_date: selectedProject.date,
       due_date: '',
@@ -469,6 +536,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
     await saveManagementData(selectedProject.id, mergedData);
 
     setSelectedProject(null);
+    setIsSavingMgmt(false);
   };
 
   const handleAddComment = async (html: string) => {
@@ -506,19 +574,98 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
     await saveActivityToDb(activity);
   };
 
+  const handleSaveCustomColumn = async () => {
+    if (!customColForm.name.trim()) return;
+    try {
+      if (customColForm.id) {
+        await supabase.from('project_custom_columns').update({ name: customColForm.name, options: customColForm.options }).eq('id', customColForm.id);
+        setCustomColumns(prev => prev.map(c => c.id === customColForm.id ? { ...c, name: customColForm.name, options: customColForm.options } : c));
+      } else {
+        const { data } = await supabase.from('project_custom_columns').insert({ name: customColForm.name, options: customColForm.options, sort_order: customColumns.length }).select().single();
+        if (data) setCustomColumns(prev => [...prev, { id: data.id, name: data.name, options: data.options || [] }]);
+      }
+      setShowCustomColModal(false);
+    } catch {
+      alert('Could not save column. Run this SQL in Supabase first:\nCREATE TABLE project_custom_columns (id uuid DEFAULT gen_random_uuid() PRIMARY KEY, name text NOT NULL, options jsonb DEFAULT \'[]\', sort_order int DEFAULT 0, created_at timestamptz DEFAULT now());\nALTER TABLE project_management ADD COLUMN IF NOT EXISTS custom_fields jsonb DEFAULT \'{}\';');
+    }
+  };
+
+  const handleDeleteCustomColumn = async (id: string) => {
+    if (!confirm('Delete this column and all its values?')) return;
+    try {
+      await supabase.from('project_custom_columns').delete().eq('id', id);
+      setCustomColumns(prev => prev.filter(c => c.id !== id));
+    } catch { alert('Delete failed.'); }
+  };
+
+  const handleAddProject = async (statusName: string) => {
+    if (!newProjectName.trim()) return;
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const newProject = await db.insert<Project>('projects', {
+        date: today,
+        project_name: newProjectName.trim(),
+        client_name: '',
+        income_stream_id: null,
+        project_value: 0,
+        created_at: new Date().toISOString()
+      });
+      if (newProject) {
+        setProjects(prev => [newProject, ...prev]);
+        const newMgmt: ProjectManagementData = {
+          status: statusName,
+          priority: 'medium',
+          start_date: today,
+          due_date: '',
+          pipeline_stage_id: null,
+          tags: [],
+          description: '',
+          progress: 0,
+          subtasks: [],
+          dependencies: [],
+          compliance_checklist: [],
+          custom_fields: {}
+        };
+        setManagementData(prev => ({ ...prev, [newProject.id]: newMgmt }));
+        await saveManagementData(newProject.id, newMgmt);
+      }
+    } catch (e) {
+      console.error('Failed to create project', e);
+    }
+    setNewProjectName('');
+    setAddingToGroup(null);
+  };
+
+  const handlePriorityChange = async (projectId: number, newPriority: string) => {
+    const existingData = managementData[projectId];
+    if (!existingData || existingData.priority === newPriority) return;
+    const updated = { ...existingData, priority: newPriority };
+    setManagementData(prev => ({ ...prev, [projectId]: updated }));
+    await saveManagementData(projectId, updated);
+  };
+
   const checkAndFireAutomations = async (
     projectId: number,
     eventType: string,
     eventData: Record<string, any>
   ) => {
     try {
-      const { data: activeAutomations } = await supabase
+      // Load all active automations — we check both primary and extra triggers
+      const { data: allActive } = await supabase
         .from('automations')
         .select('*')
-        .eq('is_active', true)
-        .eq('trigger_event', eventType);
+        .eq('is_active', true);
 
-      if (!activeAutomations || activeAutomations.length === 0) return;
+      if (!allActive || allActive.length === 0) return;
+
+      // Keep only automations whose primary OR any extra trigger matches eventType
+      const activeAutomations = allActive.filter(a => {
+        if (a.trigger_event === eventType) return true;
+        const extra: any[] = a.action_config?.extra_triggers || [];
+        return extra.some((t: any) => t.event === eventType);
+      });
+
+      if (activeAutomations.length === 0) return;
 
       const project = projects.find(p => p.id === projectId);
       if (!project) return;
@@ -538,9 +685,17 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
         .join(' ');
 
       for (const automation of activeAutomations) {
-        const conditions: any[] = automation.trigger_conditions || [];
+        // Find the conditions for the matching trigger
+        let conditions: any[];
+        if (automation.trigger_event === eventType) {
+          conditions = automation.trigger_conditions || [];
+        } else {
+          const extra: any[] = automation.action_config?.extra_triggers || [];
+          const matchedExtra = extra.find((t: any) => t.event === eventType);
+          conditions = matchedExtra?.conditions || [];
+        }
 
-        // Check conditions
+        // Check conditions — condition value for due_date_overdue is in total minutes
         let conditionsMet = true;
         for (const cond of conditions) {
           if (eventType === 'status_changed') {
@@ -548,8 +703,9 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
             if (cond.field === 'status_to' && cond.value && cond.value !== eventData.to) { conditionsMet = false; break; }
           }
           if (eventType === 'due_date_overdue' && cond.value) {
-            const thresholdHours = parseInt(cond.value);
-            if (!isNaN(thresholdHours) && (eventData.overdueHours ?? eventData.overdueDays * 24) < thresholdHours) { conditionsMet = false; break; }
+            const thresholdMinutes = parseInt(cond.value);
+            const overdueMinutes = eventData.overdueMinutes ?? (eventData.overdueHours ?? 0) * 60;
+            if (!isNaN(thresholdMinutes) && overdueMinutes < thresholdMinutes) { conditionsMet = false; break; }
           }
           if (eventType === 'assignee_added' && cond.value) {
             if (String(eventData.team_member_id) !== String(cond.value)) { conditionsMet = false; break; }
@@ -562,10 +718,8 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
         if (eventType === 'due_date_overdue' && eventData.due_date) {
           const fireKey = `${automation.id}-${projectId}-${eventData.due_date}`;
 
-          // 1. In-memory check — blocks immediately without waiting for DB
           if (firedAutomations.current.has(fireKey)) continue;
 
-          // 2. DB check — guards against fires from previous sessions (page reloads)
           const { data: existingLog, error: logCheckError } = await supabase
             .from('automation_logs')
             .select('id')
@@ -575,51 +729,95 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
             .maybeSingle();
           if (logCheckError) {
             console.error('automation_logs check failed:', logCheckError.message);
-            continue; // fail safe — don't fire if we can't confirm
+            continue;
           }
           if (existingLog) {
-            firedAutomations.current.add(fireKey); // sync future in-memory checks
+            firedAutomations.current.add(fireKey);
             continue;
           }
 
-          // 3. Claim the slot synchronously before any await so concurrent calls see it
           firedAutomations.current.add(fireKey);
 
-          // 4. Insert DB log before firing — survives page reloads
           const { error: insertError } = await supabase.from('automation_logs').insert({
             automation_id: automation.id,
             project_id: projectId,
             due_date: eventData.due_date,
           });
           if (insertError) {
-            firedAutomations.current.delete(fireKey); // roll back in-memory claim
+            firedAutomations.current.delete(fireKey);
             console.error('automation_logs insert failed:', insertError.message);
             continue;
           }
         }
 
-        // Fire action
-        if (automation.action_type === 'send_slack_message') {
-          const cfg = automation.action_config || {};
-          const webhookUrl = cfg.webhook_url || import.meta.env.VITE_SLACK_WEBHOOK_URL;
-          if (!webhookUrl) continue;
+        // Resolve actions array — support legacy single-action and new multi-action format
+        const cfg = automation.action_config || {};
+        const actions: any[] = cfg.actions?.length
+          ? cfg.actions
+          : [{ type: automation.action_type, ...cfg }];
 
-          const message = (cfg.message || '')
-            .replace(/{project_name}/g, project.project_name || '')
-            .replace(/{status}/g, mgmt?.status || eventData.to || '')
-            .replace(/{due_date}/g, formatDisplayDatetime(mgmt?.due_date || ''))
-            .replace(/{assignee}/g, assigneeNames)
-            .replace(/{assignee_slack}/g, assigneeSlacks);
+        let didFire = false;
+        for (const actionItem of actions) {
+          if (actionItem.type === 'send_slack_message') {
+            const webhookUrl = actionItem.webhook_url || import.meta.env.VITE_SLACK_WEBHOOK_URL;
+            if (!webhookUrl) continue;
 
-          try {
-            await supabase.functions.invoke('send-slack', {
-              body: { webhook_url: webhookUrl, message, channel: cfg.channel || undefined },
-              headers: { Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-            });
-          } catch (e) {
-            console.error('Failed to send Slack message', e);
+            const message = (actionItem.message || '')
+              .replace(/{project_name}/g, project.project_name || '')
+              .replace(/{status}/g, mgmt?.status || eventData.to || '')
+              .replace(/{due_date}/g, formatDisplayDatetime(mgmt?.due_date || ''))
+              .replace(/{assignee}/g, assigneeNames)
+              .replace(/{assignee_slack}/g, assigneeSlacks);
+
+            try {
+              await supabase.functions.invoke('send-slack', {
+                body: { webhook_url: webhookUrl, message, channel: actionItem.channel || undefined },
+                headers: { Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+              });
+              didFire = true;
+            } catch (e) {
+              console.error('Failed to send Slack message', e);
+            }
+
+          } else if (actionItem.type === 'change_status' && actionItem.status && mgmt) {
+            const newMgmt = { ...mgmt, status: actionItem.status };
+            setManagementData(prev => ({ ...prev, [projectId]: newMgmt }));
+            await saveManagementData(projectId, newMgmt);
+            didFire = true;
+
+          } else if (actionItem.type === 'change_assignee' && actionItem.assignee_id) {
+            const memberId = parseInt(actionItem.assignee_id);
+            const alreadyAssigned = allocations.some(
+              a => a.project_id === projectId && a.team_member_id === memberId
+            );
+            if (!alreadyAssigned) {
+              try {
+                const { data: newAlloc } = await supabase
+                  .from('project_allocations')
+                  .insert({ project_id: projectId, team_member_id: memberId })
+                  .select()
+                  .single();
+                if (newAlloc) setAllocations(prev => [...prev, newAlloc]);
+                didFire = true;
+              } catch (e) {
+                console.error('Failed to change assignee', e);
+              }
+            }
+
+          } else if (actionItem.type === 'create_subtask' && actionItem.subtask_title && mgmt) {
+            const newSubtask = {
+              id: Date.now().toString(),
+              title: actionItem.subtask_title,
+              completed: false,
+            };
+            const newMgmt = { ...mgmt, subtasks: [...(mgmt.subtasks || []), newSubtask] };
+            setManagementData(prev => ({ ...prev, [projectId]: newMgmt }));
+            await saveManagementData(projectId, newMgmt);
+            didFire = true;
           }
+        }
 
+        if (didFire) {
           await supabase
             .from('automations')
             .update({ last_triggered_at: new Date().toISOString() })
@@ -641,13 +839,19 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
     if (!projects.length || !Object.keys(managementData).length) return;
 
     const schedule = async () => {
-      const { data: automations } = await supabase
+      // Load all active automations — include those with due_date_overdue as an extra trigger
+      const { data: allActive } = await supabase
         .from('automations')
         .select('*')
-        .eq('is_active', true)
-        .eq('trigger_event', 'due_date_overdue');
+        .eq('is_active', true);
 
-      if (!automations || automations.length === 0) return;
+      const automations = (allActive || []).filter(a => {
+        if (a.trigger_event === 'due_date_overdue') return true;
+        const extra: any[] = a.action_config?.extra_triggers || [];
+        return extra.some((t: any) => t.event === 'due_date_overdue');
+      });
+
+      if (automations.length === 0) return;
 
       const now = Date.now();
 
@@ -660,29 +864,37 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
 
         for (const automation of automations) {
           const key = `${automation.id}:${project.id}:${mgmt.due_date}`;
-          // Skip if already scheduled in this session
           if (scheduledOverdue.current.has(key)) continue;
           scheduledOverdue.current.add(key);
 
-          const conditions: any[] = automation.trigger_conditions || [];
-          const thresholdHours = conditions.reduce((acc: number, c: any) => {
+          // Get conditions for the due_date_overdue trigger (primary or extra)
+          let conditions: any[];
+          if (automation.trigger_event === 'due_date_overdue') {
+            conditions = automation.trigger_conditions || [];
+          } else {
+            const extra: any[] = automation.action_config?.extra_triggers || [];
+            const matched = extra.find((t: any) => t.event === 'due_date_overdue');
+            conditions = matched?.conditions || [];
+          }
+
+          // Condition value is stored as total minutes
+          const thresholdMinutes = conditions.reduce((acc: number, c: any) => {
             const v = parseInt(c.value);
             return isNaN(v) ? acc : Math.max(acc, v);
           }, 0);
-          const fireAt = dueMs + thresholdHours * 3600 * 1000;
+
+          const fireAt = dueMs + thresholdMinutes * 60 * 1000;
           const delay = fireAt - now;
-          const overdueHours = Math.max(0, (now - dueMs) / 3600000);
+          const overdueMinutes = Math.max(0, (now - dueMs) / 60000);
 
           if (delay <= 0) {
-            // Already overdue — fire immediately (next tick)
             const t = setTimeout(() => {
-              checkAndFireAutomations(project.id, 'due_date_overdue', { overdueHours, due_date: mgmt.due_date });
+              checkAndFireAutomations(project.id, 'due_date_overdue', { overdueMinutes, due_date: mgmt.due_date });
             }, 0);
             overdueTimers.current.push(t);
           } else {
-            // Schedule for exact fire moment
             const t = setTimeout(() => {
-              checkAndFireAutomations(project.id, 'due_date_overdue', { overdueHours: thresholdHours, due_date: mgmt.due_date });
+              checkAndFireAutomations(project.id, 'due_date_overdue', { overdueMinutes: thresholdMinutes, due_date: mgmt.due_date });
             }, delay);
             overdueTimers.current.push(t);
           }
@@ -694,8 +906,43 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
 
     return () => {
       overdueTimers.current.forEach(clearTimeout);
+      overdueTimers.current = [];
+      // Reset dedup set so timers are rescheduled on next render.
+      // Without this, cleared timers would never be re-added because the key
+      // was already in scheduledOverdue.
+      scheduledOverdue.current = new Set();
     };
   }, [projects, managementData]);
+
+  // Close inline dropdowns and column menu when clicking outside
+  useEffect(() => {
+    const close = () => {
+      setOpenStatusDropdown(null);
+      setOpenPriorityDropdown(null);
+      setOpenCcDropdown(null);
+      setShowColumnMenu(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+
+  // Column resize — global mouse tracking
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!resizingCol.current) return;
+      const { key, startX, startWidth } = resizingCol.current;
+      const next = Math.max(60, startWidth + (e.clientX - startX));
+      setColWidths(prev => {
+        const updated = { ...prev, [key]: next };
+        try { localStorage.setItem('pm_colWidths', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+    };
+    const onUp = () => { resizingCol.current = null; document.body.style.cursor = ''; };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+  }, []);
 
   const toggleAssignee = async (teamMemberId: number) => {
     if (!selectedProject) return;
@@ -733,20 +980,24 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
   };
 
   const handleCreatePipeline = async () => {
-    if (!newPipelineName.trim()) return;
-    
+    if (!newPipelineName.trim()) {
+      setShowPipelineModal(false);
+      return;
+    }
+
     const newStatus = {
       id: Date.now().toString(),
       name: newPipelineName.trim(),
       color: newPipelineColor
     };
-    
+
     try {
       const { error } = await supabase.from('project_statuses').insert([newStatus]);
       if (error) throw error;
       setStatuses([...statuses, newStatus]);
       setNewPipelineName('');
       setNewPipelineColor('bg-slate-100 text-slate-800');
+      setShowPipelineModal(false);
     } catch (err) {
       console.error('Error creating pipeline:', err);
       setError('Failed to create pipeline. Please try again.');
@@ -973,6 +1224,33 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
     }
   };
 
+  const handleGenerateBrief = async (project: Project) => {
+    setBriefGenerating(prev => new Set(prev).add(project.id));
+    try {
+      const res = await fetch('https://hook.us2.make.com/lsd7rvtt6h3kr598ntwtzda5vojtbt8l', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: project.id,
+          pcb_doc_id: project.pcb_doc_id,
+          project_brief_doc_id: project.project_brief_doc_id,
+          sensitive_doc_id: project.sensitive_doc_id,
+          dev_brief_doc_id: project.dev_brief_doc_id,
+        }),
+      });
+      if (!res.ok) throw new Error(`Webhook responded with ${res.status}`);
+      await supabase.from('projects').update({ brief_generated: true }).eq('id', project.id);
+      const { data: refreshed } = await supabase.from('projects').select('*').eq('id', project.id).single();
+      if (refreshed) setProjects(prev => prev.map(p => p.id === project.id ? refreshed : p));
+    } catch (err) {
+      console.error('Brief generation failed', err);
+      setBriefToast('Brief generation failed. Try again.');
+      setTimeout(() => setBriefToast(null), 4000);
+    } finally {
+      setBriefGenerating(prev => { const n = new Set(prev); n.delete(project.id); return n; });
+    }
+  };
+
   const openEditModal = (project: Project) => {
     setSelectedProject(project);
     const existingData = managementData[project.id];
@@ -1030,18 +1308,27 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
     return BG_TO_HEX[bg] || '#94a3b8';
   };
 
-  const getPriorityIcon = (priority: string) => {
+  const getPriorityCell = (priority: string): { color: string; label: string } => {
     switch (priority) {
-      case 'high': return <Flag className="text-red-500 inline-block" size={16} fill="currentColor" />;
-      case 'medium': return <Flag className="text-orange-400 inline-block" size={16} fill="currentColor" />;
-      case 'low': return <Flag className="text-blue-500 inline-block" size={16} fill="currentColor" />;
-      default: return <Flag className="text-slate-300 inline-block" size={16} />;
+      case 'high':   return { color: '#ef4444', label: 'High' };
+      case 'medium': return { color: '#f97316', label: 'Medium' };
+      case 'low':    return { color: '#3b82f6', label: 'Low' };
+      default:       return { color: '#cbd5e1', label: '—' };
     }
   };
 
+  // Used in Kanban cards and the edit modal priority selector
+  const getPriorityIcon = (priority: string) => {
+    const { color, label } = getPriorityCell(priority);
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold" style={{ color }}>
+        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+        {label}
+      </span>
+    );
+  };
+
   // Group projects by status
-  console.log('[ProjectManagement] grouping', projects.length, 'projects into statuses:', statuses.map(s => s.name));
-  console.log('[ProjectManagement] managementData statuses per project:', projects.map(p => ({ id: p.id, name: p.project_name, mgmtStatus: managementData[p.id]?.status ?? '(none — defaults to first status)' })));
   const groupedProjects = statuses.map((status, index) => {
     return {
       status,
@@ -1064,6 +1351,32 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
       projects: uncategorizedProjects
     });
   }
+
+  // Ordered column keys, merged with any new custom columns not yet in persisted order
+  const effectiveColOrder = React.useMemo(() => {
+    const validBuiltIn = new Set(['name', 'tags', 'assignee', 'dueDate', 'priority', 'taskStatus']);
+    const validCcKeys = new Set(customColumns.map(c => `cc_${c.id}`));
+    const filtered = colOrder.filter(k => validBuiltIn.has(k) || validCcKeys.has(k));
+    const missing = customColumns.filter(c => !colOrder.includes(`cc_${c.id}`)).map(c => `cc_${c.id}`);
+    return [...filtered, ...missing];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [colOrder, customColumns]);
+
+  const getColWidth = (key: string): number => {
+    const defaults: Record<string, number> = { name: 280, tags: 120, assignee: 130, dueDate: 155, priority: 100, taskStatus: 130 };
+    return colWidths[key] ?? defaults[key] ?? 120;
+  };
+
+  const reorderCols = (fromKey: string, toKey: string) => {
+    const curr = [...effectiveColOrder];
+    const from = curr.indexOf(fromKey);
+    const to = curr.indexOf(toKey);
+    if (from === -1 || to === -1 || from === to) return;
+    curr.splice(from, 1);
+    curr.splice(to, 0, fromKey);
+    setColOrder(curr);
+    try { localStorage.setItem('pm_colOrder', JSON.stringify(curr)); } catch {}
+  };
 
   if (loading) {
     return <div className="p-8 text-center text-slate-500">Loading project management...</div>;
@@ -1103,7 +1416,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
       <div className="flex justify-between items-center">
         <h1 className="text-xl font-bold tracking-tight text-slate-900">Precision Project Management</h1>
         <div className="flex items-center gap-2">
-          {currentUser.user_type === 'admin' && (
+          {(currentUser.user_type === 'admin' || currentUser.permissions?.pmBulkEdit === 'full') && (
             <>
               <button
                 onClick={() => {
@@ -1124,14 +1437,16 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                   Bulk Edit ({selectedProjectIds.size})
                 </button>
               )}
-              <button
-                onClick={() => setShowPipelineModal(true)}
-                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1.5"
-              >
-                <Layers size={14} />
-                Manage Statuses
-              </button>
             </>
+          )}
+          {(currentUser.user_type === 'admin' || currentUser.permissions?.pmManageStatuses === 'full') && (
+            <button
+              onClick={() => setShowPipelineModal(true)}
+              className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1.5"
+            >
+              <Layers size={14} />
+              Manage Statuses
+            </button>
           )}
           {currentView === 'list' && (
             <>
@@ -1154,6 +1469,50 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                 <ChevronUp size={14} />
                 Collapse All
               </button>
+              {/* Column manager */}
+              <div className="relative">
+                <button
+                  onMouseDown={e => { e.stopPropagation(); setShowColumnMenu(v => !v); setOpenStatusDropdown(null); setOpenCcDropdown(null); }}
+                  className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1.5"
+                >
+                  <Layers size={14} />
+                  Columns
+                </button>
+                {showColumnMenu && (
+                  <div className="absolute right-0 top-full mt-1 w-64 bg-white rounded-xl shadow-xl border border-slate-100 z-50 overflow-hidden" onMouseDown={e => e.stopPropagation()}>
+                    <div className="px-3 py-2 border-b border-slate-100">
+                      <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Manage Columns</span>
+                    </div>
+                    <div className="p-2 space-y-0.5">
+                      {customColumns.map(col => (
+                        <div key={col.id} className="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-slate-50">
+                          <span className="flex-1 text-xs font-medium text-slate-700 truncate">{col.name}</span>
+                          <button onClick={() => { setCustomColForm({ id: col.id, name: col.name, options: col.options }); setShowCustomColModal(true); setShowColumnMenu(false); }} className="p-1 text-slate-400 hover:text-slate-600 rounded transition-colors">
+                            <Edit2 size={12} />
+                          </button>
+                          <button onClick={() => { handleDeleteCustomColumn(col.id); setShowColumnMenu(false); }} className="p-1 text-slate-400 hover:text-red-500 rounded transition-colors">
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      {customColumns.length === 0 && (
+                        <div className="px-2 py-2 text-xs text-slate-400 italic">No custom columns yet.</div>
+                      )}
+                    </div>
+                    {currentUser?.user_type === 'admin' && (
+                      <div className="p-2 border-t border-slate-100">
+                        <button
+                          onClick={() => { setCustomColForm({ id: null, name: '', options: [] }); setCustomColNewLabel(''); setCustomColNewColor('#3b82f6'); setShowCustomColModal(true); setShowColumnMenu(false); }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        >
+                          <Plus size={12} />
+                          Add new column
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -1175,7 +1534,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
       {currentView === 'list' && (
         <div className="space-y-6 mb-6">
           {groupedProjects.map(group => (
-            <div key={group.status.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div key={group.status.id} className="bg-white rounded-xl border border-slate-200 shadow-sm" style={{ overflow: 'hidden' }}>
               <section 
                 onDragOver={(e) => {
                   e.preventDefault();
@@ -1203,20 +1562,74 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                     {group.status.name}
                   </div>
                   <span className="text-slate-400 text-[10px] ml-1 font-medium">{group.projects.length}</span>
+                  {isBulkMode && group.projects.length > 0 && (() => {
+                    const groupIds = group.projects.map(p => p.id);
+                    const allSelected = groupIds.every(id => selectedProjectIds.has(id));
+                    return (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const next = new Set(selectedProjectIds);
+                          if (allSelected) {
+                            groupIds.forEach(id => next.delete(id));
+                          } else {
+                            groupIds.forEach(id => next.add(id));
+                          }
+                          setSelectedProjectIds(next);
+                        }}
+                        className="ml-2 text-[10px] font-semibold text-blue-600 hover:text-blue-800 transition-colors"
+                      >
+                        {allSelected ? 'Deselect All' : 'Select All'}
+                      </button>
+                    );
+                  })()}
                 </div>
 
+                {/* Horizontally scrollable table area */}
+                <div className="overflow-x-auto">
                 {/* Table Header */}
                 {group.projects.length > 0 && (
-                  <div className="flex items-center px-3 py-1 border-b border-slate-100 bg-white">
-                    {isBulkMode && <div className="w-10"></div>}
-                    <div className="w-1/3 min-w-[240px] text-xs font-medium text-slate-400">Name</div>
-                    <div className="w-32 text-xs font-medium text-slate-400">Tags</div>
-                    <div className="w-32 text-xs font-medium text-slate-400">Assignee</div>
-                    <div className="w-32 text-xs font-medium text-slate-400">Due date</div>
-                    <div className="w-24 text-xs font-medium text-slate-400">Priority</div>
-                    <div className="w-32 text-xs font-medium text-slate-400">Task Status</div>
-                    <div className="flex-1"></div>
-                    <div className="w-8"></div>
+                  <div className="flex items-stretch border-b border-slate-100 bg-white select-none" style={{ minHeight: 32 }}>
+                    {isBulkMode && <div style={{ width: 40 }} className="shrink-0" />}
+                    {effectiveColOrder.map(key => {
+                      const isCustom = key.startsWith('cc_');
+                      const ccId = isCustom ? key.slice(3) : null;
+                      const ccCol = ccId ? customColumns.find(c => c.id === ccId) : null;
+                      if (isCustom && !ccCol) return null;
+                      const w = getColWidth(key);
+                      const LABELS: Record<string, string> = { name: 'Name', tags: 'Tags', assignee: 'Assignee', dueDate: 'Due date', priority: 'Priority', taskStatus: 'Task Status' };
+                      const label = isCustom ? ccCol!.name : (LABELS[key] || key);
+                      return (
+                        <div
+                          key={key}
+                          draggable
+                          onDragStart={e => { e.stopPropagation(); draggingColKey.current = key; }}
+                          onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragOverCol(key); }}
+                          onDragLeave={() => setDragOverCol(null)}
+                          onDrop={e => { e.preventDefault(); e.stopPropagation(); if (draggingColKey.current) reorderCols(draggingColKey.current, key); draggingColKey.current = null; setDragOverCol(null); }}
+                          className={`group/colhdr relative flex items-center px-3 text-xs font-medium text-slate-400 shrink-0 border-r border-slate-100 cursor-grab active:cursor-grabbing transition-colors ${dragOverCol === key ? 'bg-blue-50 text-blue-500' : ''}`}
+                          style={{ width: w }}
+                        >
+                          <span className="truncate flex-1 select-none">{label}</span>
+                          {isCustom && ccCol && (
+                            <>
+                              <button onClick={e => { e.stopPropagation(); setCustomColForm({ id: ccCol.id, name: ccCol.name, options: ccCol.options }); setCustomColNewLabel(''); setCustomColNewColor('#3b82f6'); setShowCustomColModal(true); }} className="ml-1 opacity-0 group-hover/colhdr:opacity-100 text-slate-400 hover:text-slate-600 shrink-0 transition-all" title="Edit">
+                                <Edit2 size={10} />
+                              </button>
+                              <button onClick={e => { e.stopPropagation(); handleDeleteCustomColumn(ccCol.id); }} className="ml-0.5 opacity-0 group-hover/colhdr:opacity-100 text-slate-400 hover:text-red-500 shrink-0 transition-all" title="Delete">
+                                <Trash2 size={10} />
+                              </button>
+                            </>
+                          )}
+                          <div
+                            className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-400 z-10 transition-colors"
+                            onMouseDown={e => { e.preventDefault(); e.stopPropagation(); resizingCol.current = { key, startX: e.clientX, startWidth: w }; document.body.style.cursor = 'col-resize'; }}
+                          />
+                        </div>
+                      );
+                    })}
+                    <div className="flex-1" />
+                    <div style={{ width: 32 }} className="shrink-0" />
                   </div>
                 )}
                 
@@ -1231,10 +1644,12 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                     const displayDate = pData.due_date || '';
                     const isOverdue = !!displayDate && parsePlainLocal(displayDate) < new Date() && pData.status !== 'Done';
                     
+                    const pc = getPriorityCell(pData.priority);
+                    const statusHex = bgToHex(getStatusColor(pData.status));
                     return (
                       <React.Fragment key={project.id}>
-                        <div 
-                          className={`flex items-center px-3 py-2 hover:bg-slate-50 transition-colors border-t border-slate-100 cursor-pointer group ${selectedProjectIds.has(project.id) ? 'bg-blue-50/50' : isOverdue ? 'bg-red-50/40 border-l-2 border-l-red-400' : ''}`}
+                        <div
+                          className={`flex items-stretch min-h-[40px] hover:bg-slate-50 transition-colors border-t border-slate-100 cursor-pointer group ${selectedProjectIds.has(project.id) ? 'bg-blue-50/50' : isOverdue ? 'bg-red-50/40 border-l-2 border-l-red-400' : ''}`}
                           onClick={(e) => {
                             if (isBulkMode) {
                               const newSet = new Set(selectedProjectIds);
@@ -1252,12 +1667,12 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                           }}
                         >
                           {isBulkMode && (
-                            <div className="w-10 flex items-center" onClick={(e) => e.stopPropagation()}>
-                              <input 
-                                type="checkbox" 
+                            <div className="flex items-center px-3 shrink-0" style={{ width: 40 }} onClick={e => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
                                 className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                 checked={selectedProjectIds.has(project.id)}
-                                onChange={(e) => {
+                                onChange={e => {
                                   const newSet = new Set(selectedProjectIds);
                                   if (e.target.checked) newSet.add(project.id);
                                   else newSet.delete(project.id);
@@ -1266,126 +1681,168 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                               />
                             </div>
                           )}
-                          
-                          {/* Name */}
-                          <div className="w-1/3 min-w-[240px] flex items-center gap-2 pr-4">
-                            {pData.subtasks && pData.subtasks.length > 0 ? (
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const newExpanded = new Set(expandedProjects);
-                                  if (newExpanded.has(project.id)) {
-                                    newExpanded.delete(project.id);
-                                  } else {
-                                    newExpanded.add(project.id);
+
+                          {/* Cells rendered in column order */}
+                          {effectiveColOrder.map(key => {
+                            if (key === 'name') return (
+                              <div key="name" className="flex items-center px-3 gap-2 pr-4 shrink-0" style={{ width: getColWidth('name') }}>
+                                {pData.subtasks && pData.subtasks.length > 0 ? (
+                                  <button onClick={e => { e.stopPropagation(); const s = new Set(expandedProjects); s.has(project.id) ? s.delete(project.id) : s.add(project.id); persistExpanded(s); }} className="p-0.5 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-600 transition-colors shrink-0">
+                                    {expandedProjects.has(project.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                  </button>
+                                ) : <div className="w-[18px] shrink-0" />}
+                                <span className="text-xs font-medium text-slate-700 hover:underline truncate">{project.project_name}</span>
+                                {projectActivities.length > 0 && <MessageSquare size={12} className="text-slate-400 shrink-0" />}
+                              </div>
+                            );
+                            if (key === 'tags') return (
+                              <div key="tags" className="flex items-center px-3 flex-wrap gap-1 shrink-0" style={{ width: getColWidth('tags') }}>
+                                {pData.tags && pData.tags.length > 0 ? pData.tags.slice(0, 2).map((tag: any, idx: number) => {
+                                  let parsedTag: any = tag;
+                                  if (typeof tag === 'string' && tag.trim().startsWith('{')) {
+                                    try { parsedTag = JSON.parse(tag); } catch {}
                                   }
-                                  persistExpanded(newExpanded);
-                                }}
-                                className="p-0.5 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-600 transition-colors shrink-0"
+                                  const tagName = typeof parsedTag === 'string' ? parsedTag : (parsedTag.name || '');
+                                  let colorClass = (typeof parsedTag === 'string' ? null : parsedTag.color) || '';
+                                  if (!colorClass) {
+                                    const cols = ['bg-blue-50 text-blue-600','bg-purple-50 text-purple-600','bg-emerald-50 text-emerald-600','bg-amber-50 text-amber-600','bg-rose-50 text-rose-600','bg-cyan-50 text-cyan-600','bg-indigo-50 text-indigo-600','bg-fuchsia-50 text-fuchsia-600'];
+                                    let h = 0; for (let i = 0; i < tagName.length; i++) h = tagName.charCodeAt(i) + ((h << 5) - h);
+                                    colorClass = cols[Math.abs(h) % cols.length];
+                                  }
+                                  return <span key={idx} className={`text-[0.6rem] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider truncate max-w-full ${colorClass}`}>{tagName}</span>;
+                                }) : <span className="text-slate-400 text-xs">-</span>}
+                                {pData.tags && pData.tags.length > 2 && <span className="text-[0.6rem] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 uppercase tracking-wider">+{pData.tags.length - 2}</span>}
+                              </div>
+                            );
+                            if (key === 'assignee') return (
+                              <div key="assignee" className="flex items-center px-3 -space-x-1.5 shrink-0" style={{ width: getColWidth('assignee') }}>
+                                {assignees.slice(0, 3).map((a, idx) => {
+                                  const initials = a.name ? a.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() : '?';
+                                  return <div key={idx} className="relative group/av"><div className="w-6 h-6 rounded-full border-2 border-white bg-blue-100 flex items-center justify-center text-[0.5rem] font-bold text-blue-600 overflow-hidden">{a.avatar_url ? <img src={a.avatar_url} alt={a.name || ''} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : initials}</div><span className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap opacity-0 group-hover/av:opacity-100 z-50 transition-none">{a.name}</span></div>;
+                                })}
+                                {assignees.length > 3 && <div className="w-6 h-6 rounded-full border-2 border-white bg-slate-100 flex items-center justify-center text-[0.5rem] font-bold text-slate-500">+{assignees.length - 3}</div>}
+                                {assignees.length === 0 && <div className="w-6 h-6 rounded-full border-2 border-dashed border-slate-300 flex items-center justify-center text-slate-400" />}
+                              </div>
+                            );
+                            if (key === 'dueDate') return (
+                              <div key="dueDate" className={`flex items-center px-3 text-xs shrink-0 ${isOverdue ? 'text-red-500 font-medium' : 'text-slate-500'}`} style={{ width: getColWidth('dueDate') }}>
+                                {displayDate ? formatDisplayDatetime(displayDate) : <span className="text-slate-300">—</span>}
+                              </div>
+                            );
+                            if (key === 'priority') return (
+                              <div key="priority"
+                                className="relative self-stretch flex items-center justify-center shrink-0 border-x border-slate-100 text-xs font-semibold cursor-pointer select-none"
+                                style={{ width: getColWidth('priority'), backgroundColor: pc.color, color: pc.color === '#cbd5e1' ? '#94a3b8' : 'white' }}
+                                onMouseDown={e => { e.stopPropagation(); setOpenPriorityDropdown(openPriorityDropdown === project.id ? null : project.id); setOpenStatusDropdown(null); setOpenCcDropdown(null); setShowColumnMenu(false); }}
+                                onClick={e => e.stopPropagation()}
                               >
-                                {expandedProjects.has(project.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              </button>
-                            ) : (
-                              <div className="w-[18px] shrink-0"></div>
-                            )}
-                            <span className="text-xs font-medium text-slate-700 hover:underline truncate">
-                              {project.project_name}
-                            </span>
-                            {projectActivities.length > 0 && <MessageSquare size={12} className="text-slate-400 shrink-0" />}
-                          </div>
-                          
-                          {/* Tags */}
-                          <div className="w-32 flex flex-wrap gap-1">
-                            {pData.tags && pData.tags.length > 0 ? (
-                              pData.tags.slice(0, 2).map((tag: any, idx: number) => {
-                                const tagName = typeof tag === 'string' ? tag : tag.name;
-                                const tagColor = typeof tag === 'string' ? null : tag.color;
-                                
-                                let colorClass = tagColor || '';
-                                if (!colorClass) {
-                                  const colors = [
-                                    'bg-blue-50 text-blue-600',
-                                    'bg-purple-50 text-purple-600',
-                                    'bg-emerald-50 text-emerald-600',
-                                    'bg-amber-50 text-amber-600',
-                                    'bg-rose-50 text-rose-600',
-                                    'bg-cyan-50 text-cyan-600',
-                                    'bg-indigo-50 text-indigo-600',
-                                    'bg-fuchsia-50 text-fuchsia-600',
-                                  ];
-                                  let hash = 0;
-                                  for (let i = 0; i < tagName.length; i++) {
-                                    hash = tagName.charCodeAt(i) + ((hash << 5) - hash);
-                                  }
-                                  colorClass = colors[Math.abs(hash) % colors.length];
-                                }
-                                
-                                return (
-                                  <span key={idx} className={`text-[0.6rem] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider truncate max-w-full ${colorClass}`}>
-                                    {tagName}
-                                  </span>
-                                );
-                              })
-                            ) : (
-                              <span className="text-slate-400 text-xs">-</span>
-                            )}
-                            {pData.tags && pData.tags.length > 2 && (
-                              <span className="text-[0.6rem] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 uppercase tracking-wider">
-                                +{pData.tags.length - 2}
-                              </span>
-                            )}
-                          </div>
-                          
-                          {/* Assignees */}
-                          <div className="w-32 flex items-center -space-x-1.5">
-                            {assignees.slice(0, 3).map((assignee, idx) => {
-                              const initials = assignee.name
-                                ? assignee.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
-                                : '?';
+                                {pc.label}
+                                {openPriorityDropdown === project.id && (
+                                  <div className="absolute top-full left-0 z-50 bg-white rounded-xl shadow-xl border border-slate-100 py-1 min-w-[140px]" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+                                    {[{ value: 'high', label: 'High', color: '#ef4444' }, { value: 'medium', label: 'Medium', color: '#f97316' }, { value: 'low', label: 'Low', color: '#3b82f6' }].map(opt => (
+                                      <button key={opt.value} className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-slate-50 text-left transition-colors"
+                                        onClick={() => { handlePriorityChange(project.id, opt.value); setOpenPriorityDropdown(null); }}
+                                      >
+                                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: opt.color }} />
+                                        <span className="text-xs font-medium text-slate-700 flex-1">{opt.label}</span>
+                                        {pData.priority === opt.value && <Check size={12} className="text-blue-500 shrink-0" />}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                            if (key === 'taskStatus') return (
+                              <div key="taskStatus"
+                                className="relative self-stretch flex items-center justify-center shrink-0 border-r border-slate-100 text-xs font-semibold cursor-pointer select-none"
+                                style={{ width: getColWidth('taskStatus'), backgroundColor: statusHex, color: 'white' }}
+                                onMouseDown={e => { e.stopPropagation(); setOpenStatusDropdown(openStatusDropdown === project.id ? null : project.id); setOpenCcDropdown(null); setOpenPriorityDropdown(null); setShowColumnMenu(false); }}
+                                onClick={e => e.stopPropagation()}
+                              >
+                                {pData.status || 'Kickoff'}
+                                {openStatusDropdown === project.id && (
+                                  <div className="absolute top-full left-0 z-50 bg-white rounded-xl shadow-xl border border-slate-100 py-1 min-w-[160px]" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+                                    {statuses.map(s => (
+                                      <button key={s.id} className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-slate-50 text-left transition-colors"
+                                        onClick={() => { handleStatusChange(project.id, s.name); setOpenStatusDropdown(null); }}
+                                      >
+                                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: bgToHex(s.color) }} />
+                                        <span className="text-xs font-medium text-slate-700 flex-1">{s.name}</span>
+                                        {pData.status === s.name && <Check size={12} className="text-blue-500 shrink-0" />}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                            if (key.startsWith('cc_')) {
+                              const ccId = key.slice(3);
+                              const col = customColumns.find(c => c.id === ccId);
+                              if (!col) return null;
+                              const val = pData.custom_fields?.[col.id] || '';
+                              const opt = col.options.find(o => o.label === val);
+                              const isOpen = openCcDropdown?.projectId === project.id && openCcDropdown?.colId === col.id;
                               return (
-                                <div key={idx} className="w-6 h-6 rounded-full border-2 border-white bg-blue-100 flex items-center justify-center text-[0.5rem] font-bold text-blue-600 overflow-hidden" title={assignee.name}>
-                                  {assignee.avatar_url ? (
-                                    <img src={assignee.avatar_url} alt={assignee.name || 'User'} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                                  ) : initials}
+                                <div key={key}
+                                  className="relative self-stretch flex items-center justify-center shrink-0 border-r border-slate-100 text-xs font-semibold cursor-pointer select-none"
+                                  style={{ width: getColWidth(key), backgroundColor: opt?.color || 'transparent', color: opt ? 'white' : '#94a3b8' }}
+                                  onMouseDown={e => { e.stopPropagation(); setOpenCcDropdown(isOpen ? null : { projectId: project.id, colId: col.id }); setOpenStatusDropdown(null); setOpenPriorityDropdown(null); setShowColumnMenu(false); }}
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  {val || '—'}
+                                  {isOpen && (
+                                    <div className="absolute top-full left-0 z-50 bg-white rounded-xl shadow-xl border border-slate-100 py-1 min-w-[150px]" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+                                      <button className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-slate-50 text-left transition-colors"
+                                        onClick={() => { const f = { ...(pData.custom_fields || {}), [col.id]: '' }; const u = { ...pData, custom_fields: f }; setManagementData(prev => ({ ...prev, [project.id]: u })); saveManagementData(project.id, u); setOpenCcDropdown(null); }}
+                                      >
+                                        <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-slate-200" />
+                                        <span className="text-xs font-medium text-slate-400 flex-1">—</span>
+                                        {!val && <Check size={12} className="text-blue-500 shrink-0" />}
+                                      </button>
+                                      {col.options.map(o => (
+                                        <button key={o.label} className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-slate-50 text-left transition-colors"
+                                          onClick={() => { const f = { ...(pData.custom_fields || {}), [col.id]: o.label }; const u = { ...pData, custom_fields: f }; setManagementData(prev => ({ ...prev, [project.id]: u })); saveManagementData(project.id, u); setOpenCcDropdown(null); }}
+                                        >
+                                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: o.color }} />
+                                          <span className="text-xs font-medium text-slate-700 flex-1">{o.label}</span>
+                                          {val === o.label && <Check size={12} className="text-blue-500 shrink-0" />}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               );
-                            })}
-                            {assignees.length > 3 && (
-                              <div className="w-6 h-6 rounded-full border-2 border-white bg-slate-100 flex items-center justify-center text-[0.5rem] font-bold text-slate-500">
-                                +{assignees.length - 3}
-                              </div>
-                            )}
-                            {assignees.length === 0 && (
-                              <span className="text-xs text-slate-400">
-                                <div className="w-6 h-6 rounded-full border-2 border-dashed border-slate-300 flex items-center justify-center text-slate-400">
-                                  <span className="sr-only">Unassigned</span>
-                                </div>
-                              </span>
-                            )}
-                          </div>
-                          
-                          {/* Due Date */}
-                          <div className={`w-32 text-xs ${isOverdue ? 'text-red-500 font-medium' : 'text-slate-500'}`}>
-                            {displayDate ? formatDisplayDatetime(displayDate) : <span className="text-slate-300">—</span>}
-                          </div>
-                          
-                          {/* Priority */}
-                          <div className="w-24 flex items-center">
-                            {getPriorityIcon(pData.priority)}
-                          </div>
-                          
-                          {/* Pipeline/Status Badge */}
-                          <div className="w-32">
-                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium tracking-normal normal-case ${getStatusColor(pData.status)}`}>
-                              <Circle size={7} className="fill-current" />
-                              {pData.status || 'Kickoff'}
-                            </span>
-                          </div>
-                          
+                            }
+                            return null;
+                          })}
+
                           <div className="flex-1"></div>
                           
                           {/* Actions */}
-                          <div className="flex justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="flex items-center gap-1.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                            {(currentUser.user_type === 'admin' || currentUser.user_type === 'team_member') && (() => {
+                              const noPcb = !project.pcb_doc_id;
+                              const isReady = !!project.brief_generated;
+                              const isGenerating = briefGenerating.has(project.id);
+                              return (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); if (!isReady && !isGenerating && !noPcb) handleGenerateBrief(project); }}
+                                  disabled={isReady || isGenerating || noPcb}
+                                  title={noPcb ? 'No PCB doc linked yet' : isReady ? 'Brief already generated' : 'Generate project brief'}
+                                  className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all whitespace-nowrap ${
+                                    isReady
+                                      ? 'bg-emerald-50 text-emerald-600 border border-emerald-200 cursor-default'
+                                      : isGenerating
+                                      ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-wait'
+                                      : noPcb
+                                      ? 'bg-slate-50 text-slate-300 border border-slate-200 cursor-not-allowed'
+                                      : 'bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100'
+                                  }`}
+                                >
+                                  {isReady ? 'Brief Ready ✓' : isGenerating ? 'Generating...' : 'Generate Brief'}
+                                </button>
+                              );
+                            })()}
                             {project.drive_folder_url && (
                               <a
                                 href={project.drive_folder_url}
@@ -1403,84 +1860,76 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                         
                         {/* Subtasks rendering */}
                         {expandedProjects.has(project.id) && pData.subtasks && pData.subtasks.map((subtask: any) => (
-                          <div key={subtask.id} className="flex items-center px-3 py-2 hover:bg-slate-50 transition-colors border-t border-slate-50 group">
-                            {isBulkMode && <div className="w-10"></div>}
+                          <div key={subtask.id} className="flex items-stretch min-h-[36px] hover:bg-slate-50 transition-colors border-t border-slate-50 group">
+                            {isBulkMode && <div className="shrink-0" style={{ width: 40 }} />}
 
-                            {/* Name */}
-                            <div className="w-1/3 min-w-[240px] flex items-center gap-2 pl-10 pr-4">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const currentData = managementData[project.id];
-                                  if (!currentData) return;
-                                  const updatedSubtasks = currentData.subtasks.map((s: any) =>
-                                    s.id === subtask.id ? { ...s, completed: !s.completed } : s
-                                  );
-                                  const updatedData = { ...currentData, subtasks: updatedSubtasks };
-                                  setManagementData(prev => ({ ...prev, [project.id]: updatedData }));
-                                  saveManagementData(project.id, updatedData);
-                                }}
-                                className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${subtask.completed ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white hover:border-blue-400'}`}
-                              >
-                                {subtask.completed && <Check size={10} className="text-white" />}
-                              </button>
-                              <span className={`text-xs ${subtask.completed ? 'text-slate-400 line-through' : 'text-slate-700'} truncate`}>
-                                {subtask.title}
-                              </span>
-                            </div>
-                            
-                            {/* Tags (Empty for subtasks) */}
-                            <div className="w-32 text-slate-400 text-xs">-</div>
-                            
-                            {/* Assignee */}
-                            <div className="w-32 flex items-center">
-                              {(() => {
-                                const member = subtask.assignee_id
-                                  ? teamMembers.find(t => String(t.id) === String(subtask.assignee_id))
-                                  : null;
-                                if (!member) return (
-                                  <div className="w-6 h-6 rounded-full border-2 border-dashed border-slate-300 flex items-center justify-center text-slate-400" />
-                                );
-                                const initials = member.name
-                                  ? member.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
-                                  : '?';
+                            {/* Subtask cells follow same column order */}
+                            {effectiveColOrder.map(key => {
+                              if (key === 'name') return (
+                                <div key="name" className="flex items-center pl-10 pr-4 gap-2 shrink-0" style={{ width: getColWidth('name') }}>
+                                  <button onClick={e => { e.stopPropagation(); const cur = managementData[project.id]; if (!cur) return; const upd = cur.subtasks.map((s: any) => s.id === subtask.id ? { ...s, completed: !s.completed } : s); const d = { ...cur, subtasks: upd }; setManagementData(prev => ({ ...prev, [project.id]: d })); saveManagementData(project.id, d); }} className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${subtask.completed ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white hover:border-blue-400'}`}>
+                                    {subtask.completed && <Check size={10} className="text-white" />}
+                                  </button>
+                                  <span className={`text-xs ${subtask.completed ? 'text-slate-400 line-through' : 'text-slate-700'} truncate`}>{subtask.title}</span>
+                                </div>
+                              );
+                              if (key === 'tags') return <div key="tags" className="flex items-center px-3 text-slate-400 text-xs shrink-0" style={{ width: getColWidth('tags') }}>-</div>;
+                              if (key === 'assignee') {
+                                const member = subtask.assignee_id ? teamMembers.find((t: TeamMember) => String(t.id) === String(subtask.assignee_id)) : null;
+                                const initials = member?.name ? member.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() : '?';
                                 return (
-                                  <div className="w-6 h-6 rounded-full border-2 border-white bg-blue-100 flex items-center justify-center text-[0.5rem] font-bold text-blue-600 overflow-hidden" title={member.name}>
-                                    {member.avatar_url
-                                      ? <img src={member.avatar_url} alt={member.name || 'User'} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                                      : initials}
+                                  <div key="assignee" className="flex items-center px-3 shrink-0" style={{ width: getColWidth('assignee') }}>
+                                    {member ? <div className="relative group/av"><div className="w-6 h-6 rounded-full border-2 border-white bg-blue-100 flex items-center justify-center text-[0.5rem] font-bold text-blue-600 overflow-hidden">{member.avatar_url ? <img src={member.avatar_url} alt={member.name || ''} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : initials}</div><span className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap opacity-0 group-hover/av:opacity-100 z-50 transition-none">{member.name}</span></div> : <div className="w-6 h-6 rounded-full border-2 border-dashed border-slate-300" />}
                                   </div>
                                 );
-                              })()}
-                            </div>
-                            
-                            {/* Due Date */}
-                            <div className="w-32 text-xs text-slate-500">
-                              {subtask.due_date ? formatDisplayDatetime(subtask.due_date) : '-'}
-                            </div>
+                              }
+                              if (key === 'dueDate') return <div key="dueDate" className="flex items-center px-3 text-xs text-slate-500 shrink-0" style={{ width: getColWidth('dueDate') }}>{subtask.due_date ? formatDisplayDatetime(subtask.due_date) : '-'}</div>;
+                              if (key === 'priority') return <div key="priority" className="self-stretch shrink-0 border-x border-slate-100 flex items-center justify-center text-slate-300 text-xs" style={{ width: getColWidth('priority'), backgroundColor: '#f8fafc' }}>—</div>;
+                              if (key === 'taskStatus') return <div key="taskStatus" className="self-stretch shrink-0 border-r border-slate-100 flex items-center justify-center text-xs font-semibold" style={{ width: getColWidth('taskStatus'), backgroundColor: subtask.completed ? '#10b981' : '#94a3b8', color: 'white' }}>{subtask.completed ? 'Done' : 'Pending'}</div>;
+                              if (key.startsWith('cc_')) return <div key={key} className="self-stretch shrink-0 border-r border-slate-100" style={{ width: getColWidth(key) }} />;
+                              return null;
+                            })}
 
-                            {/* Priority */}
-                            <div className="w-24 text-slate-400 text-xs">-</div>
-
-                            {/* Pipeline/Status Badge */}
-                            <div className="w-32">
-                              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium tracking-normal normal-case ${subtask.completed ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-600'}`}>
-                                {subtask.completed ? 'Completed' : 'Pending'}
-                              </span>
-                            </div>
-                            
-                            <div className="flex-1"></div>
-                            <div className="w-8"></div>
+                            <div className="flex-1" />
+                            <div className="shrink-0" style={{ width: 32 }} />
                           </div>
                         ))}
                       </React.Fragment>
                     );
                   })}
                 </div>
+                {/* Close overflow-x-auto wrapper */}
+                </div>
+                {/* + Add new button (outside scroll wrapper so it stays full-width) */}
+                {addingToGroup === group.status.id ? (
+                  <div className="flex items-center gap-2 px-4 py-2 border-t border-slate-100" onClick={e => e.stopPropagation()}>
+                    <input
+                      autoFocus
+                      className="flex-1 text-xs border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                      placeholder="Project name..."
+                      value={newProjectName}
+                      onChange={e => setNewProjectName(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') handleAddProject(group.status.name);
+                        if (e.key === 'Escape') { setAddingToGroup(null); setNewProjectName(''); }
+                      }}
+                    />
+                    <button onClick={() => handleAddProject(group.status.name)} className="px-3 py-1.5 bg-slate-900 text-white rounded-lg text-xs font-medium hover:bg-slate-800 transition-colors">Add</button>
+                    <button onClick={() => { setAddingToGroup(null); setNewProjectName(''); }} className="px-3 py-1.5 text-slate-500 text-xs hover:text-slate-700 transition-colors">Cancel</button>
+                  </div>
+                ) : (
+                  <button
+                    className="w-full flex items-center gap-2 px-4 py-2 text-xs text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors border-t border-slate-100"
+                    onClick={() => setAddingToGroup(group.status.id)}
+                  >
+                    <Plus size={12} />
+                    Add new
+                  </button>
+                )}
               </section>
             </div>
           ))}
-          
+
           {groupedProjects.length === 0 && (
             <div className="text-center py-12 bg-white rounded-xl border border-slate-200 shadow-sm">
               <p className="text-slate-500 font-medium">No projects found for the selected period.</p>
@@ -1524,7 +1973,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                 }}
               >
                 {group.projects.map(project => {
-                  const pData = managementData[project.id] || { status: 'Kickoff', priority: 'medium', start_date: project.start_date, due_date: project.end_date, pipeline_stage_id: project.income_stream_id, tags: [], description: '', progress: 0, subtasks: [], dependencies: [], compliance_checklist: [] };
+                  const pData = managementData[project.id] || { status: statuses[0]?.name || 'Uncategorized', priority: 'medium', start_date: project.start_date, due_date: project.end_date, pipeline_stage_id: project.income_stream_id, tags: [], description: '', progress: 0, subtasks: [], dependencies: [], compliance_checklist: [] };
                   const assignees = allocations.filter(a => a.project_id === project.id).map(a => teamMembers.find(t => t.id === a.team_member_id)).filter(Boolean) as TeamMember[];
                   const isOverdue = parsePlainLocal(pData.due_date || project.end_date) < new Date() && pData.status !== 'Completed';
                   const projectActivities = activities.filter(a => a.project_id === project.id);
@@ -1541,14 +1990,18 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                         setSelectedProject(project);
                         setEditData(pData);
                       }}
-                      className="bg-white p-2 rounded-lg border border-slate-200 shadow-sm hover:shadow-md transition-all cursor-pointer group flex flex-col"
+                      className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm hover:shadow-md transition-all cursor-pointer group flex flex-col"
                     >
-                      <div className="flex justify-between items-start mb-1.5">
+                      <div className="flex justify-between items-start mb-2">
                         <div className="flex flex-wrap gap-1">
                           {pData.tags && pData.tags.length > 0 ? (
                             pData.tags.map((tag, idx) => {
-                              const tagName = typeof tag === 'string' ? tag : tag.name;
-                              const tagColor = typeof tag === 'string' ? null : tag.color;
+                              let parsedTag: any = tag;
+                              if (typeof tag === 'string' && tag.trim().startsWith('{')) {
+                                try { parsedTag = JSON.parse(tag); } catch {}
+                              }
+                              const tagName = typeof parsedTag === 'string' ? parsedTag : (parsedTag.name || '');
+                              const tagColor = typeof parsedTag === 'string' ? null : parsedTag.color;
                               
                               let colorClass = tagColor || '';
                               if (!colorClass) {
@@ -1583,17 +2036,20 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                         </div>
                         {getPriorityIcon(pData.priority)}
                       </div>
-                      <h4 className="font-medium text-xs text-slate-700 mb-1.5 group-hover:text-blue-600 transition-colors line-clamp-2 leading-snug">{project.project_name}</h4>
-                      
-                      <div className="flex items-center justify-between mt-auto mb-1.5">
+                      <h4 className="font-medium text-xs text-slate-700 mb-2 group-hover:text-blue-600 transition-colors line-clamp-2 leading-snug">{project.project_name}</h4>
+
+                      <div className="flex items-center justify-between mt-auto mb-2">
                         <div className="flex -space-x-1.5">
                           {assignees.slice(0, 3).map((assignee, idx) => (
-                            <div key={idx} className="w-5 h-5 rounded-full border-2 border-white bg-blue-100 flex items-center justify-center text-[0.45rem] font-bold text-blue-600 overflow-hidden" title={assignee.name}>
-                              {assignee.avatar_url ? (
-                                <img src={assignee.avatar_url} alt={assignee.name || 'User'} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                              ) : (
-                                (assignee.name || 'U').charAt(0).toUpperCase()
-                              )}
+                            <div key={idx} className="relative group/av">
+                              <div className="w-5 h-5 rounded-full border-2 border-white bg-blue-100 flex items-center justify-center text-[0.45rem] font-bold text-blue-600 overflow-hidden">
+                                {assignee.avatar_url ? (
+                                  <img src={assignee.avatar_url} alt={assignee.name || 'User'} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                ) : (
+                                  (assignee.name || 'U').charAt(0).toUpperCase()
+                                )}
+                              </div>
+                              <span className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap opacity-0 group-hover/av:opacity-100 z-50 transition-none">{assignee.name}</span>
                             </div>
                           ))}
                         </div>
@@ -1603,7 +2059,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                         </div>
                       </div>
                       
-                      <div className="pt-1.5 border-t border-slate-100 flex items-center gap-3 text-slate-400 text-xs">
+                      <div className="pt-2 border-t border-slate-100 flex items-center gap-3 text-slate-400 text-xs">
                         <div className="flex items-center gap-1">
                           <Layers size={12} />
                           <span>{pData.subtasks?.length || 0}</span>
@@ -1700,7 +2156,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                   {/* Task bars */}
                   <div className="flex flex-col gap-0.5">
                     {dayProjects.map(project => {
-                      const pData = managementData[project.id] || { status: 'Kickoff', due_date: '' };
+                      const pData = managementData[project.id] || { status: statuses[0]?.name || 'Uncategorized', due_date: '' };
                       const statusObj = statuses.find(s => s.name === pData.status) || statuses[0];
                       const isOverdue = parsePlainLocal(pData.due_date || project.end_date) < new Date() && pData.status !== 'Completed' && pData.status !== 'Done';
                       const barColor = isOverdue ? '#ef4444' : bgToHex(statusObj?.color || 'bg-slate--100');
@@ -1762,7 +2218,87 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
       {currentView === 'gantt' && (() => {
         const todayG = new Date();
         todayG.setHours(0, 0, 0, 0);
+        const todayEndMs = todayG.getTime() + 86400000;
 
+        // ── TODAY VIEW ──────────────────────────────────────────────────────
+        if (ganttZoom === 'today') {
+          type TodayRow = { kind: 'project' | 'subtask'; label: string; assignees: string[]; status: string; statusColor: string; projectName?: string; };
+          const todayRows: TodayRow[] = [];
+
+          projects.forEach(p => {
+            const pData = managementData[p.id] || {};
+            const rawStart = pData.start_date || p.start_date;
+            const rawEnd = pData.due_date || p.end_date;
+            if (!rawEnd) return;
+            const startMs = rawStart ? parsePlainLocal(rawStart).getTime() : parsePlainLocal(rawEnd).getTime();
+            const endMs = parsePlainLocal(rawEnd).getTime();
+            const activeToday = startMs <= todayEndMs && endMs >= todayG.getTime();
+            if (activeToday) {
+              const projectAllocs = allocations.filter(a => a.project_id === p.id);
+              const assigneeNames = projectAllocs.map(a => teamMembers.find(t => t.id === a.team_member_id)?.name).filter(Boolean) as string[];
+              const statusObj = statuses.find(s => s.name === pData.status) || statuses[0];
+              todayRows.push({ kind: 'project', label: p.project_name, assignees: assigneeNames, status: pData.status || 'Unknown', statusColor: bgToHex(statusObj?.color || 'bg-slate-100') });
+            }
+            // Subtasks active today
+            (pData.subtasks || []).forEach((st: Subtask) => {
+              if (!st.due_date) return;
+              const stStart = st.start_date ? parsePlainLocal(st.start_date).getTime() : parsePlainLocal(st.due_date).getTime();
+              const stEnd = parsePlainLocal(st.due_date).getTime();
+              if (stStart <= todayEndMs && stEnd >= todayG.getTime()) {
+                const assigneeName = st.assignee_id ? teamMembers.find(t => String(t.id) === String(st.assignee_id))?.name || 'Unassigned' : 'Unassigned';
+                const statusObj = statuses.find(s => s.name === pData.status) || statuses[0];
+                todayRows.push({ kind: 'subtask', label: st.title, assignees: [assigneeName], status: st.completed ? 'Completed' : 'Pending', statusColor: st.completed ? '#10b981' : bgToHex(statusObj?.color || 'bg-slate-100'), projectName: p.project_name });
+              }
+            });
+          });
+
+          return (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-6">
+              {/* Toolbar */}
+              <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <h3 className="font-bold text-slate-900 text-base">Today — {todayG.toLocaleDateString('default', { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
+                  <div className="flex bg-slate-100 p-1 rounded-lg">
+                    {(['today', 'day', 'week', 'month'] as const).map(z => (
+                      <button key={z} onClick={() => setGanttZoom(z)}
+                        className={`px-3 py-1 text-xs font-bold rounded-md transition-colors capitalize ${ganttZoom === z ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                        {z.charAt(0).toUpperCase() + z.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {todayRows.length === 0 ? (
+                <div className="px-6 py-12 text-center text-sm text-slate-400">Nothing scheduled for today</div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {todayRows.map((row, i) => (
+                    <div key={i} className={`flex items-center gap-4 px-5 py-3 ${row.kind === 'subtask' ? 'pl-10 bg-slate-50/60' : 'bg-white'}`}>
+                      {row.kind === 'subtask' && <span className="text-slate-300 text-xs">↳</span>}
+                      <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: row.statusColor }} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-slate-800 truncate">{row.label}</div>
+                        {row.kind === 'subtask' && row.projectName && (
+                          <div className="text-[10px] text-slate-400 truncate">{row.projectName}</div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {row.assignees.length === 0 ? (
+                          <span className="text-xs text-slate-400">Unassigned</span>
+                        ) : row.assignees.map((name, idx) => (
+                          <span key={idx} className="px-2 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-semibold rounded-full">{name}</span>
+                        ))}
+                      </div>
+                      <span className="text-[10px] font-medium text-slate-500 shrink-0 w-20 text-right">{row.status}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        // ── TIMELINE VIEW (day / week / month) ───────────────────────────────
         // Build columns based on zoom level
         type GCol = { label: string; start: Date };
         const cols: GCol[] = [];
@@ -1792,8 +2328,9 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
         }
 
         const colWidthPx = ganttZoom === 'day' ? 52 : ganttZoom === 'week' ? 88 : 96;
-        const nameWidthPx = 210;
+        const nameWidthPx = 220;
         const rowH = 40;
+        const subtaskRowH = 34;
         const totalChartW = cols.length * colWidthPx;
 
         const timelineStartMs = cols[0].start.getTime();
@@ -1817,6 +2354,14 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
 
         const MIN_BAR = 60;
 
+        const renderGridLines = (h: number) => cols.map((col, i) => {
+          const isTodayCol = ganttZoom === 'day' && col.start.getTime() === todayG.getTime();
+          return (
+            <div key={i} className={`absolute top-0 bottom-0 ${isTodayCol ? 'bg-blue-50/30' : ''}`}
+              style={{ left: i * colWidthPx, width: colWidthPx, height: h, borderRight: '1px solid #f1f5f9' }} />
+          );
+        });
+
         return (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-6">
             {/* Toolbar */}
@@ -1824,7 +2369,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
               <div className="flex items-center gap-3">
                 <h3 className="font-bold text-slate-900 text-base">Project Timeline</h3>
                 <div className="flex bg-slate-100 p-1 rounded-lg">
-                  {(['day', 'week', 'month'] as const).map(z => (
+                  {(['today', 'day', 'week', 'month'] as const).map(z => (
                     <button key={z} onClick={() => setGanttZoom(z)}
                       className={`px-3 py-1 text-xs font-bold rounded-md transition-colors capitalize ${ganttZoom === z ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                       {z.charAt(0).toUpperCase() + z.slice(1)}
@@ -1867,7 +2412,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                 {ganttProjects.length === 0 ? (
                   <div className="px-4 py-8 text-center text-sm text-slate-400">No projects with due dates to display</div>
                 ) : ganttProjects.map((project, rowIdx) => {
-                  const pData = managementData[project.id] || { status: 'Kickoff' };
+                  const pData = managementData[project.id] || { status: statuses[0]?.name || 'Uncategorized' };
                   const statusObj = statuses.find(s => s.name === pData.status) || statuses[0];
 
                   const rawStart = pData.start_date || project.start_date;
@@ -1885,7 +2430,6 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                     barLeft = msToX(startMs);
                     barWidth = Math.max(MIN_BAR / 2, msToX(endMs) - barLeft);
                   } else {
-                    // No start date: 60px min bar ending at due date
                     const endX = msToX(endMs);
                     barLeft = endX - MIN_BAR;
                     barWidth = MIN_BAR;
@@ -1894,54 +2438,132 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                   const clampedLeft = Math.max(0, barLeft);
                   const clampedWidth = Math.min(barWidth + barLeft - clampedLeft, totalChartW - clampedLeft);
 
+                  // Team members assigned to this project
+                  const projectAllocs = allocations.filter(a => a.project_id === project.id);
+                  const assigneeNames = projectAllocs.map(a => teamMembers.find(t => t.id === a.team_member_id)?.name).filter(Boolean) as string[];
+                  const assigneeLabel = assigneeNames.join(', ');
+
+                  const hasSubtasks = (pData.subtasks || []).length > 0;
+                  const isExpanded = ganttExpanded.has(project.id);
+
                   return (
-                    <div key={project.id} className="flex" style={{ height: rowH, background: rowIdx % 2 === 1 ? '#f8fafc' : 'white', borderBottom: '1px solid #f1f5f9' }}>
-                      {/* Name */}
-                      <div style={{ width: nameWidthPx, minWidth: nameWidthPx, height: rowH }}
-                        className="flex items-center px-4 border-r border-slate-100">
-                        <span className="text-xs font-medium text-slate-700 hover:text-blue-600 cursor-pointer transition-colors truncate"
-                          onClick={() => { setSelectedProject(project); setEditData(pData); }}>
-                          {project.project_name}
-                        </span>
+                    <div key={project.id}>
+                      {/* Project row */}
+                      <div className="flex" style={{ height: rowH, background: rowIdx % 2 === 1 ? '#f8fafc' : 'white', borderBottom: '1px solid #f1f5f9' }}>
+                        {/* Name */}
+                        <div style={{ width: nameWidthPx, minWidth: nameWidthPx, height: rowH }}
+                          className="flex items-center px-2 border-r border-slate-100 gap-1">
+                          {hasSubtasks ? (
+                            <button
+                              onClick={() => {
+                                const next = new Set(ganttExpanded);
+                                isExpanded ? next.delete(project.id) : next.add(project.id);
+                                setGanttExpanded(next);
+                              }}
+                              className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-slate-700 transition-colors shrink-0"
+                            >
+                              <ChevronDown size={13} className={`transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
+                            </button>
+                          ) : (
+                            <span className="w-5 shrink-0" />
+                          )}
+                          <span className="text-xs font-medium text-slate-700 hover:text-blue-600 cursor-pointer transition-colors truncate"
+                            onClick={() => { setSelectedProject(project); setEditData(pData); }}>
+                            {project.project_name}
+                          </span>
+                        </div>
+                        {/* Bar area */}
+                        <div className="relative" style={{ width: totalChartW, height: rowH }}>
+                          {renderGridLines(rowH)}
+                          {clampedWidth > 0 && (
+                            <div
+                              className="absolute cursor-pointer hover:opacity-85 transition-opacity"
+                              style={{
+                                left: clampedLeft, width: clampedWidth,
+                                top: 7, bottom: 7, borderRadius: 6,
+                                background: barColor,
+                                display: 'flex', alignItems: 'center',
+                                paddingLeft: 6, paddingRight: 6, overflow: 'hidden',
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+                              }}
+                              onClick={() => { setSelectedProject(project); setEditData(pData); }}
+                              title={`${project.project_name}${rawStart ? `\nStart: ${rawStart}` : ''}${rawEnd ? `\nDue: ${rawEnd}` : ''}${assigneeLabel ? `\nAssigned: ${assigneeLabel}` : ''}`}
+                            >
+                              {clampedWidth > 55 && (
+                                <span style={{ fontSize: 10, fontWeight: 600, color: 'white', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                                  {assigneeLabel || project.project_name}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {todayX >= 0 && todayX <= totalChartW && (
+                            <div className="absolute top-0 bottom-0 pointer-events-none z-10"
+                              style={{ left: todayX, width: 2, background: 'rgba(59,130,246,0.5)' }} />
+                          )}
+                        </div>
                       </div>
-                      {/* Bar area */}
-                      <div className="relative" style={{ width: totalChartW, height: rowH }}>
-                        {/* Column grid lines + today highlight */}
-                        {cols.map((col, i) => {
-                          const isTodayCol = ganttZoom === 'day' && col.start.getTime() === todayG.getTime();
-                          return (
-                            <div key={i} className={`absolute top-0 bottom-0 ${isTodayCol ? 'bg-blue-50/30' : ''}`}
-                              style={{ left: i * colWidthPx, width: colWidthPx, borderRight: '1px solid #f1f5f9' }} />
-                          );
-                        })}
-                        {/* Bar */}
-                        {clampedWidth > 0 && (
-                          <div
-                            className="absolute cursor-pointer hover:opacity-85 transition-opacity"
-                            style={{
-                              left: clampedLeft, width: clampedWidth,
-                              top: 7, bottom: 7, borderRadius: 6,
-                              background: barColor,
-                              display: 'flex', alignItems: 'center',
-                              paddingLeft: 6, paddingRight: 6, overflow: 'hidden',
-                              boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
-                            }}
-                            onClick={() => { setSelectedProject(project); setEditData(pData); }}
-                            title={`${project.project_name}${rawStart ? `\nStart: ${rawStart}` : ''}${rawEnd ? `\nDue: ${rawEnd}` : ''}`}
-                          >
-                            {clampedWidth > 55 && (
-                              <span style={{ fontSize: 10, fontWeight: 600, color: 'white', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                                {project.project_name}
+
+                      {/* Subtask rows */}
+                      {isExpanded && (pData.subtasks || []).map((subtask: Subtask, stIdx: number) => {
+                        if (!subtask.due_date) return null;
+                        const stEndMs = parsePlainLocal(subtask.due_date).getTime();
+                        let stLeft: number, stWidth: number;
+                        if (subtask.start_date) {
+                          const stStartMs = parsePlainLocal(subtask.start_date).getTime();
+                          stLeft = msToX(stStartMs);
+                          stWidth = Math.max(MIN_BAR / 2, msToX(stEndMs) - stLeft);
+                        } else {
+                          stLeft = msToX(stEndMs) - MIN_BAR;
+                          stWidth = MIN_BAR;
+                        }
+                        const stClampedLeft = Math.max(0, stLeft);
+                        const stClampedWidth = Math.min(stWidth + stLeft - stClampedLeft, totalChartW - stClampedLeft);
+                        const stAssigneeName = subtask.assignee_id
+                          ? teamMembers.find(t => String(t.id) === String(subtask.assignee_id))?.name || ''
+                          : '';
+                        const stBarColor = subtask.completed ? '#10b981' : '#64748b';
+
+                        return (
+                          <div key={subtask.id} className="flex" style={{ height: subtaskRowH, background: stIdx % 2 === 0 ? '#f8fafc' : '#f1f5f9', borderBottom: '1px solid #e2e8f0' }}>
+                            {/* Subtask name */}
+                            <div style={{ width: nameWidthPx, minWidth: nameWidthPx, height: subtaskRowH }}
+                              className="flex items-center pl-8 pr-2 border-r border-slate-100 gap-1">
+                              <span className="text-slate-300 text-xs mr-1">↳</span>
+                              <span className={`text-[11px] truncate ${subtask.completed ? 'text-slate-400 line-through' : 'text-slate-600'}`}>
+                                {subtask.title}
                               </span>
-                            )}
+                            </div>
+                            {/* Subtask bar area */}
+                            <div className="relative" style={{ width: totalChartW, height: subtaskRowH }}>
+                              {renderGridLines(subtaskRowH)}
+                              {stClampedWidth > 0 && (
+                                <div
+                                  className="absolute"
+                                  style={{
+                                    left: stClampedLeft, width: stClampedWidth,
+                                    top: 6, bottom: 6, borderRadius: 4,
+                                    background: stBarColor,
+                                    display: 'flex', alignItems: 'center',
+                                    paddingLeft: 5, paddingRight: 5, overflow: 'hidden',
+                                    opacity: subtask.completed ? 0.6 : 1,
+                                  }}
+                                  title={`${subtask.title}${stAssigneeName ? `\nAssigned: ${stAssigneeName}` : ''}${subtask.due_date ? `\nDue: ${subtask.due_date}` : ''}`}
+                                >
+                                  {stClampedWidth > 50 && stAssigneeName && (
+                                    <span style={{ fontSize: 9, fontWeight: 600, color: 'white', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                                      {stAssigneeName}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {todayX >= 0 && todayX <= totalChartW && (
+                                <div className="absolute top-0 bottom-0 pointer-events-none z-10"
+                                  style={{ left: todayX, width: 2, background: 'rgba(59,130,246,0.5)' }} />
+                              )}
+                            </div>
                           </div>
-                        )}
-                        {/* Today vertical line */}
-                        {todayX >= 0 && todayX <= totalChartW && (
-                          <div className="absolute top-0 bottom-0 pointer-events-none z-10"
-                            style={{ left: todayX, width: 2, background: 'rgba(59,130,246,0.5)' }} />
-                        )}
-                      </div>
+                        );
+                      })}
                     </div>
                   );
                 })}
@@ -1950,6 +2572,14 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
           </div>
         );
       })()}
+
+      {/* Brief error toast */}
+      {briefToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-3 px-5 py-3 bg-red-600 text-white rounded-xl shadow-xl text-sm font-semibold animate-in fade-in slide-in-from-bottom-2">
+          <span>{briefToast}</span>
+          <button onClick={() => setBriefToast(null)} className="text-red-200 hover:text-white transition-colors ml-1">✕</button>
+        </div>
+      )}
 
       {/* Custom Edit Modal */}
       {selectedProject && (
@@ -2016,7 +2646,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                         <option value="high">High Priority</option>
                       </select>
                       <div className="absolute left-4 top-1/2 -translate-y-1/2">
-                        {getPriorityIcon(editData.priority)}
+                        <span className="w-2.5 h-2.5 rounded-full block" style={{ backgroundColor: getPriorityCell(editData.priority).color }} />
                       </div>
                       <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                     </div>
@@ -2027,7 +2657,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                     <input
                       type="date"
                       value={editData.start_date}
-                      onChange={e => setEditData({ ...editData, start_date: e.target.value })}
+                      onChange={e => { setEditData({ ...editData, start_date: e.target.value }); setDateError(''); }}
                       style={{ height: '38px' }}
                       className="w-full appearance-none bg-white border border-slate-200 rounded-lg px-3 text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
                     />
@@ -2038,7 +2668,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                     <input
                       type="datetime-local"
                       value={toDatetimeLocal(editData.due_date)}
-                      onChange={e => setEditData({ ...editData, due_date: e.target.value })}
+                      onChange={e => { setEditData({ ...editData, due_date: e.target.value }); setDateError(''); }}
                       style={{ height: '38px' }}
                       className="w-full appearance-none bg-white border border-slate-200 rounded-lg px-3 text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
                     />
@@ -2073,12 +2703,15 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                     <div className="flex items-center gap-2">
                       <div className="flex -space-x-2">
                         {allocations.filter(a => a.project_id === selectedProject.id).map(a => teamMembers.find(tm => tm.id === a.team_member_id)).filter(Boolean).map((assignee, idx) => (
-                          <div key={idx} className="w-10 h-10 rounded-full border-2 border-white bg-blue-100 flex items-center justify-center text-xs font-medium text-blue-600 overflow-hidden shadow-sm" title={assignee?.name}>
-                            {assignee?.avatar_url ? (
-                              <img src={assignee.avatar_url} alt={assignee.name || 'User'} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                            ) : (
-                              (assignee?.name || 'U').charAt(0).toUpperCase()
-                            )}
+                          <div key={idx} className="relative group/av">
+                            <div className="w-10 h-10 rounded-full border-2 border-white bg-blue-100 flex items-center justify-center text-xs font-medium text-blue-600 overflow-hidden shadow-sm">
+                              {assignee?.avatar_url ? (
+                                <img src={assignee.avatar_url} alt={assignee.name || 'User'} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                              ) : (
+                                (assignee?.name || 'U').charAt(0).toUpperCase()
+                              )}
+                            </div>
+                            <span className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap opacity-0 group-hover/av:opacity-100 z-50 transition-none">{assignee?.name}</span>
                           </div>
                         ))}
                       </div>
@@ -2136,8 +2769,12 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                     <label style={{ display: 'block', fontSize: '11px', fontWeight: 500, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '4px' }}>Tags</label>
                     <div className="flex flex-wrap items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl p-2 min-h-[52px]">
                       {editData.tags.map((tag, idx) => {
-                        const tagName = typeof tag === 'string' ? tag : tag.name;
-                        let tagColor = typeof tag === 'string' ? null : tag.color;
+                        let parsedTag: any = tag;
+                        if (typeof tag === 'string' && tag.trim().startsWith('{')) {
+                          try { parsedTag = JSON.parse(tag); } catch {}
+                        }
+                        const tagName = typeof parsedTag === 'string' ? parsedTag : (parsedTag.name || '');
+                        let tagColor = typeof parsedTag === 'string' ? null : parsedTag.color;
                         
                         if (!tagColor) {
                           const colors = [
@@ -2280,7 +2917,19 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                               <X size={16} />
                             </button>
                           </div>
-                          <div className="flex items-center gap-4 pl-9">
+                          <div className="flex items-center gap-4 pl-9 flex-wrap overflow-hidden min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-slate-400 font-medium">Start</span>
+                              <input
+                                type="datetime-local"
+                                value={toDatetimeLocal(subtask.start_date)}
+                                onChange={(e) => {
+                                  const updated = editData.subtasks.map(s => s.id === subtask.id ? { ...s, start_date: e.target.value } : s);
+                                  setEditData({ ...editData, subtasks: updated });
+                                }}
+                                className="text-xs text-slate-500 bg-transparent border-none p-0 focus:ring-0 w-28"
+                              />
+                            </div>
                             <div className="flex items-center gap-2">
                               <Calendar size={12} className="text-slate-400" />
                               <input
@@ -2352,9 +3001,9 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                           const depProject = projects.find(p => p.id === dep.dependent_on_project_id);
                           return (
                             <div key={dep.id} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100 group">
-                              <div className="flex items-center gap-3">
-                                <LinkIcon size={14} className="text-slate-400" />
-                                <span className="text-sm font-medium text-slate-700">{depProject?.project_name || 'Unknown Project'}</span>
+                              <div className="flex items-center gap-3 min-w-0">
+                                <LinkIcon size={14} className="text-slate-400 shrink-0" />
+                                <span className="text-sm font-medium text-slate-700 truncate min-w-0">{depProject?.project_name || 'Unknown Project'}</span>
                                 <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${dep.type === 'blocking' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
                                   {dep.type}
                                 </span>
@@ -2412,8 +3061,8 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                       <h3 className="text-sm font-semibold text-slate-900 mb-2">Compliance Checklist</h3>
                       <div className="space-y-2 mb-2">
                         {editData.compliance_checklist.map(item => (
-                          <div key={item.id} className="flex items-center gap-3 group">
-                            <button 
+                          <div key={item.id} className="flex items-center gap-3 group min-w-0">
+                            <button
                               onClick={() => {
                                 const updated = editData.compliance_checklist.map(c => c.id === item.id ? { ...c, completed: !c.completed } : c);
                                 setEditData({ ...editData, compliance_checklist: updated });
@@ -2422,7 +3071,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                             >
                               <CheckCircle2 size={12} strokeWidth={3} />
                             </button>
-                            <span className={`text-sm font-medium flex-1 ${item.completed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{item.title}</span>
+                            <span className={`text-sm font-medium flex-1 min-w-0 truncate ${item.completed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{item.title}</span>
                             <button 
                               onClick={() => {
                                 const updated = editData.compliance_checklist.filter(c => c.id !== item.id);
@@ -2479,13 +3128,21 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                 </div>
                 
                 {/* Save Button */}
-                <div className="pt-3 border-t border-slate-100 flex justify-end">
-                  <button
-                    onClick={handleSaveManagementData}
-                    className="px-6 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-medium transition-all shadow-xl shadow-slate-900/20 text-sm"
-                  >
-                    Save Changes
-                  </button>
+                <div className="pt-3 border-t border-slate-100">
+                  {dateError && (
+                    <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                      <span>{dateError}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-end">
+                    <button
+                      onClick={handleSaveManagementData}
+                      className="px-6 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-medium transition-all shadow-xl shadow-slate-900/20 text-sm"
+                    >
+                      Save Changes
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2530,7 +3187,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
               {/* Scrollable activity list */}
               <div className="flex-1 overflow-y-auto scrollbar-hide" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '0' }}>
                 {activities.filter(a => a.project_id === selectedProject.id).map(activity => (
-                  <div key={activity.id} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
+                  <div key={activity.id} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '14px 0', borderBottom: '1px solid #f1f5f9' }}>
                     <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#e2e8f0', flexShrink: 0, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 500, color: '#64748b' }}>
                       {activity.user_avatar ? (
                         <img src={activity.user_avatar} alt={activity.user_name || 'User'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} referrerPolicy="no-referrer" />
@@ -2872,6 +3529,82 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
               Projects in this status will be moved to Uncategorized.
             </p>
           </div>
+        </div>
+      </Modal>
+
+      {/* Custom Column Modal */}
+      <Modal
+        title={customColForm.id ? 'Edit Column' : 'Add Column'}
+        isOpen={showCustomColModal}
+        onClose={() => setShowCustomColModal(false)}
+        onSave={handleSaveCustomColumn}
+        saveLabel={customColForm.id ? 'Save Column' : 'Add Column'}
+      >
+        <div className="space-y-5">
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Column Name</label>
+            <input
+              type="text"
+              value={customColForm.name}
+              onChange={e => setCustomColForm(f => ({ ...f, name: e.target.value }))}
+              placeholder="e.g. Phase, Department, Region..."
+              className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-medium text-slate-700"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Dropdown Options</label>
+            <div className="space-y-2 mb-3">
+              {customColForm.options.map((opt, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded shrink-0" style={{ backgroundColor: opt.color }} />
+                  <span className="flex-1 text-sm font-medium text-slate-700">{opt.label}</span>
+                  <button onClick={() => setCustomColForm(f => ({ ...f, options: f.options.filter((_, j) => j !== i) }))} className="p-1 text-slate-400 hover:text-red-500 transition-colors">
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+              {customColForm.options.length === 0 && <p className="text-xs text-slate-400 italic">No options yet — add one below.</p>}
+            </div>
+
+            <div className="flex gap-2 items-center">
+              <input
+                type="color"
+                value={customColNewColor}
+                onChange={e => setCustomColNewColor(e.target.value)}
+                className="w-9 h-9 rounded-lg border border-slate-200 cursor-pointer p-0.5 shrink-0"
+              />
+              <input
+                type="text"
+                value={customColNewLabel}
+                onChange={e => setCustomColNewLabel(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && customColNewLabel.trim()) {
+                    setCustomColForm(f => ({ ...f, options: [...f.options, { label: customColNewLabel.trim(), color: customColNewColor }] }));
+                    setCustomColNewLabel('');
+                  }
+                }}
+                placeholder="Option label..."
+                className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
+              />
+              <button
+                onClick={() => {
+                  if (!customColNewLabel.trim()) return;
+                  setCustomColForm(f => ({ ...f, options: [...f.options, { label: customColNewLabel.trim(), color: customColNewColor }] }));
+                  setCustomColNewLabel('');
+                }}
+                className="px-3 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition-colors shrink-0"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+
+          {customColForm.id && (
+            <button onClick={() => handleDeleteCustomColumn(customColForm.id!)} className="w-full py-2 text-red-500 text-sm font-semibold hover:bg-red-50 rounded-xl transition-colors border border-red-100">
+              Delete Column
+            </button>
+          )}
         </div>
       </Modal>
     </div>
