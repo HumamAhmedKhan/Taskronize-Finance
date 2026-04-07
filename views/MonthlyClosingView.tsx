@@ -69,7 +69,8 @@ function computeStreamCard(
   projectRevenueLinks: any[],
   members: TeamMember[],
   mStart: string,
-  mEnd: string
+  mEnd: string,
+  allRevenues: Revenue[]
 ): StreamCardData {
   const gross = streamRevs.reduce((s, r) => s + Number(r.total_sale), 0);
   const platformFees = streamRevs.reduce((s, r) => {
@@ -87,14 +88,22 @@ function computeStreamCard(
     )
     .reduce((s, e) => s + Number(e.amount), 0);
 
-  // Production: allocations for projects linked to this stream's revenues
-  const revenueIds = new Set(streamRevs.map(r => r.id));
-  const linkedProjectIds = new Set<number>(
-    projectRevenueLinks
-      .filter(link => revenueIds.has(Number(link.revenue_id)))
-      .map(link => Number(link.project_id))
+  // Production attribution using paid_revenue_commission_ids chain:
+  // ALLOC_xxx → project_allocations.id → project_id → project_revenue_links → revenue_id → revenues → income_stream_id
+  // number-name → parse revenue id → revenues → income_stream_id
+  // Build project→stream map from ALL revenues (not just this month's) so cross-month projects
+  // are attributed correctly to exactly one stream — no equal splitting across streams.
+  const projectStreamMap = new Map<number, number>();
+  for (const link of projectRevenueLinks) {
+    const pid = Number(link.project_id);
+    if (!projectStreamMap.has(pid)) {
+      const rev = allRevenues.find(r => r.id === Number(link.revenue_id));
+      if (rev) projectStreamMap.set(pid, Number(rev.income_stream_id));
+    }
+  }
+  const productionAllocs = allocations.filter(
+    a => projectStreamMap.get(a.project_id) === stream.id
   );
-  const productionAllocs = allocations.filter(a => linkedProjectIds.has(a.project_id));
   const productionExpenses = expenses.filter(e =>
     (e.is_production || e.category === 'Production Costs') &&
     Number(e.income_stream_id) === stream.id &&
@@ -510,7 +519,7 @@ const MonthlyClosingView: React.FC = () => {
   });
 
   const [data, setData] = useState<{
-    revenues: Revenue[];
+    allRevenues: Revenue[];
     streams: IncomeStream[];
     expenses: Expense[];
     allPayments: ProductionPayment[];
@@ -519,7 +528,7 @@ const MonthlyClosingView: React.FC = () => {
     members: TeamMember[];
     projectRevenueLinks: any[];
   }>({
-    revenues: [], streams: [], expenses: [], allPayments: [],
+    allRevenues: [], streams: [], expenses: [], allPayments: [],
     projects: [], allocations: [], members: [], projectRevenueLinks: []
   });
   const [loading, setLoading] = useState(true);
@@ -547,7 +556,7 @@ const MonthlyClosingView: React.FC = () => {
       const end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
 
       const [revs, streams, exps, pymts, projs, allocs, members, links] = await Promise.all([
-        supabase.from('revenues').select('*').gte('date', start).lte('date', end),
+        db.get<Revenue>('revenues'), // all revenues — needed for cross-month project→stream attribution
         db.get<IncomeStream>('income_streams'),
         db.get<Expense>('expenses'),
         db.get<ProductionPayment>('production_payments'), // all time — for alloc settlement checks
@@ -558,7 +567,7 @@ const MonthlyClosingView: React.FC = () => {
       ]);
 
       setData({
-        revenues: revs.data || [],
+        allRevenues: revs,
         streams,
         expenses: exps,
         allPayments: pymts,
@@ -577,18 +586,21 @@ const MonthlyClosingView: React.FC = () => {
   useEffect(() => { loadData(); }, [selectedMonth]);
 
   const streamData = useMemo(() => {
-    const { revenues, streams, expenses, allPayments, allocations, projects, projectRevenueLinks, members } = data;
+    const { allRevenues, streams, expenses, allPayments, allocations, projects, projectRevenueLinks, members } = data;
     const [year, month] = selectedMonth.split('-');
     const mStart = `${selectedMonth}-01`;
     const mEnd = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
 
+    // Month-filtered revenues for gross/commission calculations
+    const monthRevenues = allRevenues.filter(r => r.date >= mStart && r.date <= mEnd);
+
     return streams
       .map(stream => {
-        const streamRevs = revenues.filter(r => Number(r.income_stream_id) === stream.id);
+        const streamRevs = monthRevenues.filter(r => Number(r.income_stream_id) === stream.id);
         if (streamRevs.length === 0) return null;
         return computeStreamCard(
           stream, streamRevs, expenses, allPayments,
-          allocations, projects, projectRevenueLinks, members, mStart, mEnd
+          allocations, projects, projectRevenueLinks, members, mStart, mEnd, allRevenues
         );
       })
       .filter(Boolean) as StreamCardData[];
