@@ -222,7 +222,14 @@ function computeStreamCard(
       const isSettled = monthPayments.some(
         p => Number(p.recipient_id) === member.id && p.payment_type === 'partner'
       );
-      return { name: c.name, owed: c.amount, isSettled };
+      // Net owed = gross commission minus prorated deductConnects / deductProduction
+      const rule = sortedStructure.find((r: any) => r.name === c.name);
+      const connectsDed = (rule?.deductConnects && rule?.type === 'percentage')
+        ? connects * Number(rule.value) / 100 : 0;
+      const productionDed = (rule?.deductProduction && rule?.type === 'percentage')
+        ? productionTotal * Number(rule.value) / 100 : 0;
+      const netOwed = Math.max(0, c.amount - connectsDed - productionDed);
+      return { name: c.name, owed: netOwed, isSettled };
     })
     .filter(Boolean) as PartnerSettlementRow[];
 
