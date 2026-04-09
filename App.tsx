@@ -19,7 +19,8 @@ import {
   ChevronRight,
   DollarSign,
   Zap,
-  Lock
+  Lock,
+  Landmark
 } from 'lucide-react';
 import bcrypt from 'bcryptjs';
 import { User, PagePermissions } from './types';
@@ -39,6 +40,7 @@ import AIAdvisorView from './views/AIAdvisorView';
 import ProjectManagementView from './views/ProjectManagementView';
 import MyEarningsView from './views/MyEarningsView';
 import AutomationsView from './views/AutomationsView';
+import WithdrawalsView from './views/WithdrawalsView';
 import { DateShortcuts } from './components/DateShortcuts';
 import Modal from './components/Modal';
 
@@ -140,6 +142,7 @@ const App: React.FC = () => {
     if (!user || !user.permissions) return false;
     if (page === 'dashboard') return user.permissions['dashboard'] !== 'none';
     if (page === 'automations') return user.user_type === 'admin';
+    if (page === 'withdrawals') return user.user_type === 'admin';
     if (page === 'myEarnings') return user.user_type === 'partner' || user.user_type === 'team_member';
     if (page === 'revenue' && user.user_type === 'partner') return true;
     let level = user.permissions[page];
@@ -171,6 +174,7 @@ const App: React.FC = () => {
     { id: 'monthlyClosing', name: 'Monthly Closing', icon: Calendar },
     { id: 'backup', name: 'Backup & Restore', icon: Database },
     ...(user?.user_type === 'admin' ? [{ id: 'automations', name: 'Automations', icon: Zap }] : []),
+    ...(user?.user_type === 'admin' ? [{ id: 'withdrawals', name: 'Withdrawals', icon: Landmark }] : []),
     ...(user?.user_type === 'partner' || user?.user_type === 'team_member' ? [{ id: 'myEarnings', name: 'My Earnings', icon: DollarSign }] : [])
   ];
 
@@ -189,6 +193,7 @@ const App: React.FC = () => {
       case 'monthlyClosing': return <MonthlyClosingView />;
       case 'backup': return <BackupView />;
       case 'automations': return <AutomationsView />;
+      case 'withdrawals': return <WithdrawalsView />;
       case 'myEarnings': return <MyEarningsView currentUser={user} globalStart={startDate} globalEnd={endDate} />;
       default: return <Dashboard startDate={startDate} endDate={endDate} />;
     }

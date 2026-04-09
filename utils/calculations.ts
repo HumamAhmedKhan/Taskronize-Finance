@@ -84,20 +84,27 @@ export function calculateRevenueDetails(
     else if (comm.calculationBase === 'net') base = netAfterPlatform;
     else base = remaining;
 
-    let grossComm = comm.type === 'percentage' ? (base * Number(comm.value) / 100) : Number(comm.value);
+    // Store gross commission (before any deductions) for reference
+    const grossComm = comm.type === 'percentage' ? (base * Number(comm.value) / 100) : Number(comm.value);
     grossCommissions[comm.name] = grossComm;
-    
-    let cDed = 0, pDed = 0;
-    
-    // Simple proportional deduction: Partner's share = Total expense * Commission percentage
+
+    // Apply connects/production deductions to the BASE before computing the commission percentage.
+    // This matches the correct formula: commission = rate% × (base − connects − production)
+    let effectiveBase = base;
+    const cDed = (comm.deductConnects && connectsMonthly > 0 && comm.type === 'percentage')
+      ? connectsMonthly * Number(comm.value) / 100 : 0;
+    const pDed = (comm.deductProduction && totalProdMonthly > 0 && comm.type === 'percentage')
+      ? totalProdMonthly * Number(comm.value) / 100 : 0;
     if (comm.deductConnects && connectsMonthly > 0 && comm.type === 'percentage') {
-      cDed = connectsMonthly * (Number(comm.value) / 100);
+      effectiveBase = Math.max(0, effectiveBase - connectsMonthly);
     }
     if (comm.deductProduction && totalProdMonthly > 0 && comm.type === 'percentage') {
-      pDed = totalProdMonthly * (Number(comm.value) / 100);
+      effectiveBase = Math.max(0, effectiveBase - totalProdMonthly);
     }
-    
-    const final = Math.max(0, grossComm - cDed - pDed);
+
+    const final = comm.type === 'percentage'
+      ? effectiveBase * Number(comm.value) / 100
+      : grossComm;
     commissions[comm.name] = final;
     deductionsApplied[comm.name] = { connects: cDed, production: pDed };
     remaining -= final;

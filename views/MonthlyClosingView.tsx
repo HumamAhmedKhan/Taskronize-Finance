@@ -31,12 +31,20 @@ interface CommissionLine {
   amount: number;
   percent: number;
   base: string; // 'net' | 'gross' | 'remaining'
+  deductConnects: boolean;
+  deductProduction: boolean;
 }
 
 interface PartnerSettlementRow {
   name: string;
   owed: number;
   isSettled: boolean;
+}
+
+interface ConnectsBreakdownEntry {
+  name: string;
+  percent: number;
+  share: number;
 }
 
 interface StreamCardData {
@@ -48,6 +56,7 @@ interface StreamCardData {
   commissionLines: CommissionLine[];
   connects: number;
   connectsOwnerShare: number;
+  connectsBreakdown: ConnectsBreakdownEntry[];
   productionTotal: number;
   productionOwnerShare: number;
   productionByMember: ProductionMemberRow[];
@@ -94,6 +103,14 @@ function computeStreamCard(
   // Build project→stream map from ALL revenues (not just this month's) so cross-month projects
   // are attributed correctly to exactly one stream — no equal splitting across streams.
   const projectStreamMap = new Map<number, number>();
+  // Primary: project.income_stream_id — explicitly set when the project is created.
+  // This is the authoritative source for which stream a project belongs to.
+  for (const proj of projects) {
+    if (proj.income_stream_id != null) {
+      projectStreamMap.set(proj.id, Number(proj.income_stream_id));
+    }
+  }
+  // Fallback: projects without income_stream_id set — derive from revenue links.
   for (const link of projectRevenueLinks) {
     const pid = Number(link.project_id);
     if (!projectStreamMap.has(pid)) {
@@ -118,8 +135,21 @@ function computeStreamCard(
     (c: any) => c.calculationBase === 'remaining'
   );
 
-  const connectsOwnerShare = isYHType ? connects / 3 : connects;
-  const productionOwnerShare = isYHType ? productionTotal / 3 : productionTotal;
+  // Connects breakdown: each rule with deductConnects:true contributes (value% of connects)
+  const connectsBreakdown: ConnectsBreakdownEntry[] = (stream.commission_structure || [])
+    .filter((r: any) => r.deductConnects && r.type === 'percentage')
+    .map((r: any) => ({
+      name: r.name,
+      percent: Number(r.value),
+      share: connects * Number(r.value) / 100,
+    }));
+  const connectsOwnerShare = connects - connectsBreakdown.reduce((s, e) => s + e.share, 0);
+
+  // Production breakdown: each rule with deductProduction:true contributes (value% of production)
+  const productionRecipientShare = (stream.commission_structure || [])
+    .filter((r: any) => r.deductProduction && r.type === 'percentage')
+    .reduce((s: number, r: any) => s + productionTotal * Number(r.value) / 100, 0);
+  const productionOwnerShare = productionTotal - productionRecipientShare;
 
   const sortedStructure = [...(stream.commission_structure || [])].sort(
     (a: any, b: any) => (a.order ?? 0) - (b.order ?? 0)
@@ -133,18 +163,27 @@ function computeStreamCard(
   if (isYHType) {
     let remaining = net;
 
-    // Net-based commissions first
+    // Step 1: deduct full connects from the running pool
+    remaining -= connects;
+
+    // Step 2: net-based commissions, each applied to (net - connects) as their fixed base.
+    // Using (net - connects) rather than current remaining ensures multiple net-based rules
+    // all apply to the same base, not a sequentially-decreasing pool.
+    const netMinusConnects = Math.max(0, net - connects);
     sortedStructure
       .filter((c: any) => c.calculationBase === 'net')
       .forEach((rule: any) => {
-        const amount = net * Number(rule.value) / 100;
-        commissionLines.push({ name: rule.name, amount, percent: Number(rule.value), base: 'net' });
+        const base = (rule.deductConnects && connects > 0) ? netMinusConnects : net;
+        const amount = base * Number(rule.value) / 100;
+        commissionLines.push({
+          name: rule.name, amount, percent: Number(rule.value), base: 'net',
+          deductConnects: !!rule.deductConnects, deductProduction: !!rule.deductProduction,
+        });
         remaining -= amount;
       });
 
-    // Deduct owner's shares of connects and production
-    remaining -= connectsOwnerShare;
-    remaining -= productionOwnerShare;
+    // Step 3: deduct full production from the pool (not just owner share)
+    remaining -= productionTotal;
     yhRemaining = remaining;
 
     // Remaining-based commissions
@@ -153,7 +192,10 @@ function computeStreamCard(
       .filter((c: any) => c.calculationBase === 'remaining')
       .forEach((rule: any) => {
         const amount = remaining * Number(rule.value) / 100;
-        commissionLines.push({ name: rule.name, amount, percent: Number(rule.value), base: 'remaining' });
+        commissionLines.push({
+          name: rule.name, amount, percent: Number(rule.value), base: 'remaining',
+          deductConnects: false, deductProduction: false,
+        });
         remaining -= amount;
         if (!firstRemDone) {
           yhFinalPot = remaining; // after Hasham (first remaining) = final pot
@@ -163,17 +205,24 @@ function computeStreamCard(
 
     ownerTake = remaining;
   } else {
-    // Standard waterfall: sum gross commissions per partner
+    // Standard waterfall: sum net commissions per partner
+    // If deductConnects:true, subtract connects from the base BEFORE applying rate
     let totalComms = 0;
     sortedStructure.forEach((rule: any) => {
       let ruleTotal = 0;
       streamRevs.forEach(rev => {
         const pct = Number(rev.platform_fee_percent ?? stream.platform_fee_percent ?? 0);
         const revNet = Number(rev.total_sale) * (1 - pct / 100);
-        const base =
+        let base =
           rule.calculationBase === 'gross' ? Number(rev.total_sale) :
           rule.calculationBase === 'net'   ? revNet :
           0;
+        if (rule.deductConnects && connects > 0 && rule.type === 'percentage') {
+          base = Math.max(0, base - connects);
+        }
+        if (rule.deductProduction && productionTotal > 0 && rule.type === 'percentage') {
+          base = Math.max(0, base - productionTotal);
+        }
         ruleTotal += rule.type === 'percentage'
           ? base * Number(rule.value) / 100
           : Number(rule.value);
@@ -181,11 +230,14 @@ function computeStreamCard(
       if (ruleTotal > 0) {
         commissionLines.push({
           name: rule.name, amount: ruleTotal,
-          percent: Number(rule.value), base: rule.calculationBase
+          percent: Number(rule.value), base: rule.calculationBase,
+          deductConnects: !!rule.deductConnects, deductProduction: !!rule.deductProduction,
         });
         totalComms += ruleTotal;
       }
     });
+    // Recipients' connects/production shares are baked into reduced commission bases.
+    // Owner's remainder (connectsOwnerShare, productionOwnerShare) must still be deducted.
     ownerTake = net - totalComms - connectsOwnerShare - productionOwnerShare;
   }
 
@@ -222,21 +274,16 @@ function computeStreamCard(
       const isSettled = monthPayments.some(
         p => Number(p.recipient_id) === member.id && p.payment_type === 'partner'
       );
-      // Net owed = gross commission minus prorated deductConnects / deductProduction
-      const rule = sortedStructure.find((r: any) => r.name === c.name);
-      const connectsDed = (rule?.deductConnects && rule?.type === 'percentage')
-        ? connects * Number(rule.value) / 100 : 0;
-      const productionDed = (rule?.deductProduction && rule?.type === 'percentage')
-        ? productionTotal * Number(rule.value) / 100 : 0;
-      const netOwed = Math.max(0, c.amount - connectsDed - productionDed);
-      return { name: c.name, owed: netOwed, isSettled };
+      // c.amount is already the net commission after connects/production base reductions.
+      // No further deductions needed — using it directly avoids double-counting.
+      return { name: c.name, owed: c.amount, isSettled };
     })
     .filter(Boolean) as PartnerSettlementRow[];
 
   return {
     stream, gross, platformFees, net,
     isYHType, commissionLines,
-    connects, connectsOwnerShare,
+    connects, connectsOwnerShare, connectsBreakdown,
     productionTotal, productionOwnerShare, productionByMember,
     yhRemaining, yhFinalPot,
     partnerSettlement, ownerTake
@@ -251,8 +298,7 @@ const fmt = (v: number) =>
 const ProductionDropdown: React.FC<{
   productionByMember: ProductionMemberRow[];
   ownerShare: number;
-  note: string;
-}> = ({ productionByMember, ownerShare, note }) => {
+}> = ({ productionByMember, ownerShare }) => {
   const [open, setOpen] = useState(false);
   const [expandedMember, setExpandedMember] = useState<number | null>(null);
 
@@ -265,7 +311,6 @@ const ProductionDropdown: React.FC<{
         >
           {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           <span>Production</span>
-          <span className="text-xs text-slate-400 font-normal">({note})</span>
         </button>
         <span className="text-rose-500 font-bold text-sm">−{fmt(ownerShare)}</span>
       </div>
@@ -353,8 +398,8 @@ const StreamCard: React.FC<{ data: StreamCardData }> = ({ data }) => {
   const {
     stream, gross, platformFees, net,
     isYHType, commissionLines,
-    connects, connectsOwnerShare,
-    productionByMember, productionOwnerShare,
+    connects, connectsOwnerShare, connectsBreakdown,
+    productionTotal, productionByMember, productionOwnerShare,
     yhRemaining, yhFinalPot,
     partnerSettlement, ownerTake
   } = data;
@@ -362,6 +407,12 @@ const StreamCard: React.FC<{ data: StreamCardData }> = ({ data }) => {
   const netComms = commissionLines.filter(c => c.base === 'net');
   const grossComms = commissionLines.filter(c => c.base === 'gross');
   const remComms = commissionLines.filter(c => c.base === 'remaining');
+
+  // Owner's % of the final pot: what's left after all remaining-based rules
+  // after the first one (which sets yhFinalPot). Derived purely from commission_structure.
+  const ownerFinalPct = remComms.length > 1
+    ? Math.round(remComms.slice(1).reduce((p, c) => p * (1 - c.percent / 100), 1) * 100)
+    : 100;
 
   const getSettlement = (name: string) =>
     partnerSettlement.find(ps => ps.name === name);
@@ -412,16 +463,20 @@ const StreamCard: React.FC<{ data: StreamCardData }> = ({ data }) => {
         {/* Net-based commissions */}
         {netComms.map(c => {
           const s = getSettlement(c.name);
+          const baseLabel = c.deductConnects && c.deductProduction ? 'net−connects−prod'
+            : c.deductConnects ? 'net−connects'
+            : c.deductProduction ? 'net−production'
+            : 'net';
           return (
             <div key={c.name} className="py-2">
               <div className="flex justify-between items-center">
                 <span className="text-sm text-slate-500">
                   {c.name}{' '}
-                  <span className="text-slate-400 text-xs">({c.percent}% of net)</span>
+                  <span className="text-slate-400 text-xs">({c.percent}% of {baseLabel})</span>
                 </span>
                 <span className="text-rose-500 font-bold">−{fmt(c.amount)}</span>
               </div>
-              {s && !s.isSettled && <UnsettledBadge name={c.name} amount={c.amount} />}
+              {s && !s.isSettled && <UnsettledBadge name={c.name} amount={s.owed} />}
             </div>
           );
         })}
@@ -429,39 +484,57 @@ const StreamCard: React.FC<{ data: StreamCardData }> = ({ data }) => {
         {/* Gross-based commissions (non-YH) */}
         {!isYHType && grossComms.map(c => {
           const s = getSettlement(c.name);
+          const baseLabel = c.deductConnects && c.deductProduction ? 'gross−connects−prod'
+            : c.deductConnects ? 'gross−connects'
+            : c.deductProduction ? 'gross−production'
+            : 'gross';
           return (
             <div key={c.name} className="py-2">
               <div className="flex justify-between items-center">
                 <span className="text-sm text-slate-500">
                   {c.name}{' '}
-                  <span className="text-slate-400 text-xs">({c.percent}% of gross)</span>
+                  <span className="text-slate-400 text-xs">({c.percent}% of {baseLabel})</span>
                 </span>
                 <span className="text-rose-500 font-bold">−{fmt(c.amount)}</span>
               </div>
-              {s && !s.isSettled && <UnsettledBadge name={c.name} amount={c.amount} />}
+              {s && !s.isSettled && <UnsettledBadge name={c.name} amount={s.owed} />}
             </div>
           );
         })}
 
-        {/* Connects */}
+        {/* Connects — for YH deduct full pool; for non-YH only owner's remainder */}
         {connects > 0 && (
-          <div className="flex justify-between items-center py-2">
-            <span className="text-sm text-slate-500">
-              Connects{' '}
-              <span className="text-slate-400 text-xs">
-                {isYHType ? '(÷3 your share)' : '(your cost)'}
+          <div className="py-2">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-slate-500">Connects</span>
+              <span className="text-rose-500 font-bold">
+                −{fmt(isYHType ? connects : connectsOwnerShare)}
               </span>
-            </span>
-            <span className="text-rose-500 font-bold">−{fmt(connectsOwnerShare)}</span>
+            </div>
+            {connectsBreakdown.length > 0 && (
+              <div className="pl-3 mt-1 space-y-0.5">
+                {connectsBreakdown.map(entry => (
+                  <div key={entry.name} className="flex justify-between items-center">
+                    <span className="text-xs text-slate-400">
+                      {entry.name} ({entry.percent}% of connects)
+                    </span>
+                    <span className="text-xs text-slate-400">{fmt(entry.share)}</span>
+                  </div>
+                ))}
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-slate-400">Your share</span>
+                  <span className="text-xs text-slate-400">{fmt(connectsOwnerShare)}</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* Production collapsible */}
-        {(productionByMember.length > 0 || productionOwnerShare > 0) && (
+        {(productionByMember.length > 0 || productionTotal > 0) && (
           <ProductionDropdown
             productionByMember={productionByMember}
-            ownerShare={productionOwnerShare}
-            note={isYHType ? '÷3 your share' : 'your cost'}
+            ownerShare={isYHType ? productionTotal : productionOwnerShare}
           />
         )}
 
@@ -486,12 +559,14 @@ const StreamCard: React.FC<{ data: StreamCardData }> = ({ data }) => {
                   </span>
                   <span className="text-rose-500 font-bold">−{fmt(c.amount)}</span>
                 </div>
-                {s && !s.isSettled && <UnsettledBadge name={c.name} amount={c.amount} />}
+                {s && !s.isSettled && <UnsettledBadge name={c.name} amount={s.owed} />}
               </div>
-              {/* Show "= Final pot" after first remaining commission (Hasham) */}
+              {/* Show "= Final pot" after first remaining commission */}
               {idx === 0 && yhFinalPot !== undefined && (
                 <div className="flex justify-between items-center py-2 px-3 bg-slate-50 rounded-lg my-1">
-                  <span className="text-xs font-bold text-slate-600">= Final pot (split 50/50)</span>
+                  <span className="text-xs font-bold text-slate-600">
+                    = Final pot{remComms.length > 1 ? ` (you: ${ownerFinalPct}%)` : ''}
+                  </span>
                   <span className="text-sm font-black text-slate-700">{fmt(yhFinalPot)}</span>
                 </div>
               )}
@@ -504,7 +579,7 @@ const StreamCard: React.FC<{ data: StreamCardData }> = ({ data }) => {
           ownerTake >= 0 ? 'bg-emerald-50' : 'bg-rose-50'
         }`}>
           <span className="font-black text-slate-700 text-sm">
-            Your Take{isYHType ? ' (50%)' : ''}
+            Your Take{isYHType && ownerFinalPct < 100 ? ` (${ownerFinalPct}%)` : ''}
           </span>
           <span className={`text-xl font-black ${ownerTake >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
             {fmt(ownerTake)}
@@ -557,37 +632,42 @@ const MonthlyClosingView: React.FC = () => {
 
   const loadData = async () => {
     setLoading(true);
-    try {
-      const [year, month] = selectedMonth.split('-');
-      const start = `${selectedMonth}-01`;
-      const end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+    let revs: Revenue[] = [], streams: IncomeStream[] = [], exps: Expense[] = [];
+    let pymts: ProductionPayment[] = [], projs: Project[] = [], allocs: ProjectAllocation[] = [];
+    let members: TeamMember[] = [], linksData: any[] = [];
 
-      const [revs, streams, exps, pymts, projs, allocs, members, links] = await Promise.all([
-        db.get<Revenue>('revenues'), // all revenues — needed for cross-month project→stream attribution
+    try {
+      [revs, streams, exps, pymts, projs, allocs, members] = await Promise.all([
+        db.get<Revenue>('revenues'),
         db.get<IncomeStream>('income_streams'),
         db.get<Expense>('expenses'),
-        db.get<ProductionPayment>('production_payments'), // all time — for alloc settlement checks
+        db.get<ProductionPayment>('production_payments'),
         db.get<Project>('projects'),
         db.get<ProjectAllocation>('project_allocations'),
         db.get<TeamMember>('team_members'),
-        supabase.from('project_revenue_links').select('*')
       ]);
-
-      setData({
-        allRevenues: revs,
-        streams,
-        expenses: exps,
-        allPayments: pymts,
-        projects: projs,
-        allocations: allocs,
-        members,
-        projectRevenueLinks: links.data || []
-      });
     } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
+      console.error('Error loading monthly closing data:', err);
     }
+
+    try {
+      const links = await supabase.from('project_revenue_links').select('*');
+      linksData = links.data || [];
+    } catch (err) {
+      console.error('Error loading project_revenue_links:', err);
+    }
+
+    setData({
+      allRevenues: revs || [],
+      streams: streams || [],
+      expenses: exps || [],
+      allPayments: pymts || [],
+      projects: projs || [],
+      allocations: allocs || [],
+      members: members || [],
+      projectRevenueLinks: linksData,
+    });
+    setLoading(false);
   };
 
   useEffect(() => { loadData(); }, [selectedMonth]);
@@ -598,6 +678,11 @@ const MonthlyClosingView: React.FC = () => {
     const mStart = `${selectedMonth}-01`;
     const mEnd = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
 
+    // Guard against undefined arrays
+    if (!streams || !allRevenues || !expenses || !allPayments || !allocations || !projects || !members) {
+      return [];
+    }
+
     // Month-filtered revenues for gross/commission calculations
     const monthRevenues = allRevenues.filter(r => r.date >= mStart && r.date <= mEnd);
 
@@ -605,10 +690,15 @@ const MonthlyClosingView: React.FC = () => {
       .map(stream => {
         const streamRevs = monthRevenues.filter(r => Number(r.income_stream_id) === stream.id);
         if (streamRevs.length === 0) return null;
-        return computeStreamCard(
-          stream, streamRevs, expenses, allPayments,
-          allocations, projects, projectRevenueLinks, members, mStart, mEnd, allRevenues
-        );
+        try {
+          return computeStreamCard(
+            stream, streamRevs, expenses, allPayments,
+            allocations, projects, projectRevenueLinks || [], members, mStart, mEnd, allRevenues
+          );
+        } catch (err) {
+          console.error(`Error computing stream card for "${stream.name}":`, err);
+          return null;
+        }
       })
       .filter(Boolean) as StreamCardData[];
   }, [data, selectedMonth]);
@@ -616,14 +706,10 @@ const MonthlyClosingView: React.FC = () => {
   const totalGross = useMemo(() =>
     streamData.reduce((s, d) => s + d.gross, 0), [streamData]);
 
-  const totalCosts = useMemo(() =>
-    streamData.reduce((s, d) => {
-      const comms = d.commissionLines.reduce((s2, c) => s2 + c.amount, 0);
-      return s + d.platformFees + comms + d.connectsOwnerShare + d.productionOwnerShare;
-    }, 0), [streamData]);
-
   const yourTakeTotal = useMemo(() =>
     streamData.reduce((s, d) => s + d.ownerTake, 0), [streamData]);
+
+  const totalCosts = useMemo(() => totalGross - yourTakeTotal, [totalGross, yourTakeTotal]);
 
   if (loading) return (
     <div className="flex items-center justify-center py-40">

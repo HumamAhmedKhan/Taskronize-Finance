@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run build` is the only TypeScript error check. No tests exist.
 - Do NOT use optimistic updates for Supabase writes unless explicitly told to.
 - When you discover a workaround or repeated failure, add a one-line bullet (under 15 words) to ## Learnings.
+- Do not push the code changes to the Git until you are asked to push them.
 
 ## Commands
 ```bash

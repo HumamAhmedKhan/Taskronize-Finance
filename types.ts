@@ -15,6 +15,8 @@ export interface PagePermissions {
   backup: PermissionLevel;
   aiAdvisor: PermissionLevel;
   automations: PermissionLevel;
+  withdrawals: PermissionLevel;
+  myEarnings: PermissionLevel;
   pmBulkEdit: PermissionLevel;
   pmManageStatuses: PermissionLevel;
 }
