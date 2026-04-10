@@ -5,7 +5,7 @@ import {
   Revenue, IncomeStream, Expense, ProductionPayment,
   TeamMember, Project, ProjectAllocation
 } from '../types';
-import { extractPaidIds } from '../utils/calculations';
+import { extractPaidIds, getConnectsMonthly } from '../utils/calculations';
 import {
   ChevronDown, ChevronRight, AlertTriangle, CheckCircle2,
   Loader2, Download
@@ -88,14 +88,8 @@ function computeStreamCard(
   }, 0);
   const net = gross - platformFees;
 
-  // Connects for this stream this month
-  const connects = expenses
-    .filter(e =>
-      (e.category === 'Variable: Connects' || e.category === 'Connects') &&
-      Number(e.income_stream_id) === stream.id &&
-      e.date >= mStart && e.date <= mEnd
-    )
-    .reduce((s, e) => s + Number(e.amount), 0);
+  // Connects for this stream this month — single canonical source from calculations.ts
+  const connects = getConnectsMonthly(expenses, stream.id, mStart, mEnd);
 
   // Production attribution using paid_revenue_commission_ids chain:
   // ALLOC_xxx → project_allocations.id → project_id → project_revenue_links → revenue_id → revenues → income_stream_id
@@ -417,6 +411,29 @@ const StreamCard: React.FC<{ data: StreamCardData }> = ({ data }) => {
   const getSettlement = (name: string) =>
     partnerSettlement.find(ps => ps.name === name);
 
+  // Reorder commission rows: deduction rows before the recipients that use them
+  const sortCommissionRows = (comms: CommissionLine[]): CommissionLine[] => {
+    const noDeductions = comms.filter(c => !c.deductConnects && !c.deductProduction);
+    const hasDeductConnects = comms.some(c => c.deductConnects);
+    const hasDeductProduction = comms.some(c => c.deductProduction);
+
+    const deductConnectsRows = comms.filter(c => c.deductConnects && !c.deductProduction);
+    const deductProdRows = comms.filter(c => c.deductProduction && !c.deductConnects);
+    const deductBothRows = comms.filter(c => c.deductConnects && c.deductProduction);
+
+    const result = [...noDeductions];
+    if (hasDeductConnects) {
+      result.push(...deductConnectsRows, ...deductBothRows);
+    }
+    if (hasDeductProduction) {
+      result.push(...deductProdRows);
+    }
+    return result;
+  };
+
+  const sortedNetComms = sortCommissionRows(netComms);
+  const sortedGrossComms = sortCommissionRows(grossComms);
+
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
       {/* Header */}
@@ -460,83 +477,186 @@ const StreamCard: React.FC<{ data: StreamCardData }> = ({ data }) => {
           <span className="font-black text-slate-800">{fmt(net)}</span>
         </div>
 
-        {/* Net-based commissions */}
-        {netComms.map(c => {
-          const s = getSettlement(c.name);
-          const baseLabel = c.deductConnects && c.deductProduction ? 'net−connects−prod'
-            : c.deductConnects ? 'net−connects'
-            : c.deductProduction ? 'net−production'
-            : 'net';
-          return (
-            <div key={c.name} className="py-2">
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-slate-500">
-                  {c.name}{' '}
-                  <span className="text-slate-400 text-xs">({c.percent}% of {baseLabel})</span>
-                </span>
-                <span className="text-rose-500 font-bold">−{fmt(c.amount)}</span>
-              </div>
-              {s && !s.isSettled && <UnsettledBadge name={c.name} amount={s.owed} />}
-            </div>
-          );
-        })}
+        {/* Commission waterfall with deduction rows interleaved */}
+        {(() => {
+          const items: React.ReactNode[] = [];
+          let connectsRendered = false;
+          let productionRendered = false;
 
-        {/* Gross-based commissions (non-YH) */}
-        {!isYHType && grossComms.map(c => {
-          const s = getSettlement(c.name);
-          const baseLabel = c.deductConnects && c.deductProduction ? 'gross−connects−prod'
-            : c.deductConnects ? 'gross−connects'
-            : c.deductProduction ? 'gross−production'
-            : 'gross';
-          return (
-            <div key={c.name} className="py-2">
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-slate-500">
-                  {c.name}{' '}
-                  <span className="text-slate-400 text-xs">({c.percent}% of {baseLabel})</span>
-                </span>
-                <span className="text-rose-500 font-bold">−{fmt(c.amount)}</span>
-              </div>
-              {s && !s.isSettled && <UnsettledBadge name={c.name} amount={s.owed} />}
-            </div>
-          );
-        })}
-
-        {/* Connects — for YH deduct full pool; for non-YH only owner's remainder */}
-        {connects > 0 && (
-          <div className="py-2">
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-slate-500">Connects</span>
-              <span className="text-rose-500 font-bold">
-                −{fmt(isYHType ? connects : connectsOwnerShare)}
-              </span>
-            </div>
-            {connectsBreakdown.length > 0 && (
-              <div className="pl-3 mt-1 space-y-0.5">
-                {connectsBreakdown.map(entry => (
-                  <div key={entry.name} className="flex justify-between items-center">
-                    <span className="text-xs text-slate-400">
-                      {entry.name} ({entry.percent}% of connects)
+          // Render net-based commissions with deduction rows interleaved
+          sortedNetComms.forEach((c, idx) => {
+            // Render Connects before the first commission with deductConnects
+            if (!connectsRendered && c.deductConnects && connects > 0) {
+              items.push(
+                <div key="connects" className="py-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-slate-500">Connects</span>
+                    <span className="text-rose-500 font-bold">
+                      −{fmt(isYHType ? connects : connectsOwnerShare)}
                     </span>
-                    <span className="text-xs text-slate-400">{fmt(entry.share)}</span>
                   </div>
-                ))}
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-slate-400">Your share</span>
-                  <span className="text-xs text-slate-400">{fmt(connectsOwnerShare)}</span>
+                  {connectsBreakdown.length > 0 && (
+                    <div className="pl-3 mt-1 space-y-0.5">
+                      {connectsBreakdown.map(entry => (
+                        <div key={entry.name} className="flex justify-between items-center">
+                          <span className="text-xs text-slate-400">
+                            {entry.name} ({entry.percent}% of connects)
+                          </span>
+                          <span className="text-xs text-slate-400">{fmt(entry.share)}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-slate-400">Your share</span>
+                        <span className="text-xs text-slate-400">{fmt(connectsOwnerShare)}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
-          </div>
-        )}
+              );
+              connectsRendered = true;
+            }
 
-        {/* Production collapsible */}
-        {(productionByMember.length > 0 || productionTotal > 0) && (
-          <ProductionDropdown
-            productionByMember={productionByMember}
-            ownerShare={isYHType ? productionTotal : productionOwnerShare}
-          />
-        )}
+            // Render Production before the first commission with deductProduction
+            if (!productionRendered && c.deductProduction && (productionByMember.length > 0 || productionTotal > 0)) {
+              items.push(
+                <ProductionDropdown
+                  key="production"
+                  productionByMember={productionByMember}
+                  ownerShare={isYHType ? productionTotal : productionOwnerShare}
+                />
+              );
+              productionRendered = true;
+            }
+
+            // Render the commission row
+            const s = getSettlement(c.name);
+            const baseLabel = c.deductConnects && c.deductProduction ? 'net−connects−prod'
+              : c.deductConnects ? 'net−connects'
+              : c.deductProduction ? 'net−production'
+              : 'net';
+            items.push(
+              <div key={c.name} className="py-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-slate-500">
+                    {c.name}{' '}
+                    <span className="text-slate-400 text-xs">({c.percent}% of {baseLabel})</span>
+                  </span>
+                  <span className="text-rose-500 font-bold">−{fmt(c.amount)}</span>
+                </div>
+                {s && !s.isSettled && <UnsettledBadge name={c.name} amount={s.owed} />}
+              </div>
+            );
+          });
+
+          // Render gross-based commissions (non-YH) with deduction rows interleaved
+          if (!isYHType) {
+            sortedGrossComms.forEach((c, idx) => {
+              // Render Connects before the first gross commission with deductConnects
+              if (!connectsRendered && c.deductConnects && connects > 0) {
+                items.push(
+                  <div key="connects" className="py-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-slate-500">Connects</span>
+                      <span className="text-rose-500 font-bold">
+                        −{fmt(isYHType ? connects : connectsOwnerShare)}
+                      </span>
+                    </div>
+                    {connectsBreakdown.length > 0 && (
+                      <div className="pl-3 mt-1 space-y-0.5">
+                        {connectsBreakdown.map(entry => (
+                          <div key={entry.name} className="flex justify-between items-center">
+                            <span className="text-xs text-slate-400">
+                              {entry.name} ({entry.percent}% of connects)
+                            </span>
+                            <span className="text-xs text-slate-400">{fmt(entry.share)}</span>
+                          </div>
+                        ))}
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-slate-400">Your share</span>
+                          <span className="text-xs text-slate-400">{fmt(connectsOwnerShare)}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+                connectsRendered = true;
+              }
+
+              // Render Production before the first gross commission with deductProduction
+              if (!productionRendered && c.deductProduction && (productionByMember.length > 0 || productionTotal > 0)) {
+                items.push(
+                  <ProductionDropdown
+                    key="production"
+                    productionByMember={productionByMember}
+                    ownerShare={isYHType ? productionTotal : productionOwnerShare}
+                  />
+                );
+                productionRendered = true;
+              }
+
+              // Render the commission row
+              const s = getSettlement(c.name);
+              const baseLabel = c.deductConnects && c.deductProduction ? 'gross−connects−prod'
+                : c.deductConnects ? 'gross−connects'
+                : c.deductProduction ? 'gross−production'
+                : 'gross';
+              items.push(
+                <div key={c.name} className="py-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-slate-500">
+                      {c.name}{' '}
+                      <span className="text-slate-400 text-xs">({c.percent}% of {baseLabel})</span>
+                    </span>
+                    <span className="text-rose-500 font-bold">−{fmt(c.amount)}</span>
+                  </div>
+                  {s && !s.isSettled && <UnsettledBadge name={c.name} amount={s.owed} />}
+                </div>
+              );
+            });
+          }
+
+          // If Connects/Production haven't been rendered yet (no deductConnects/deductProduction commissions), render them at the end
+          if (!connectsRendered && connects > 0) {
+            items.push(
+              <div key="connects" className="py-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-slate-500">Connects</span>
+                  <span className="text-rose-500 font-bold">
+                    −{fmt(isYHType ? connects : connectsOwnerShare)}
+                  </span>
+                </div>
+                {connectsBreakdown.length > 0 && (
+                  <div className="pl-3 mt-1 space-y-0.5">
+                    {connectsBreakdown.map(entry => (
+                      <div key={entry.name} className="flex justify-between items-center">
+                        <span className="text-xs text-slate-400">
+                          {entry.name} ({entry.percent}% of connects)
+                        </span>
+                        <span className="text-xs text-slate-400">{fmt(entry.share)}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-slate-400">Your share</span>
+                      <span className="text-xs text-slate-400">{fmt(connectsOwnerShare)}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          if (!productionRendered && (productionByMember.length > 0 || productionTotal > 0)) {
+            items.push(
+              <ProductionDropdown
+                key="production"
+                productionByMember={productionByMember}
+                ownerShare={isYHType ? productionTotal : productionOwnerShare}
+              />
+            );
+          }
+
+          return items;
+        })()}
 
         {/* YH only: = Remaining subtotal */}
         {isYHType && yhRemaining !== undefined && (

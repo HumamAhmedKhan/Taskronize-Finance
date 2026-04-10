@@ -1,6 +1,25 @@
 
 import { Revenue, IncomeStream, Expense, ProductionPayment, Project, ProjectAllocation } from '../types';
 
+/**
+ * Returns the total connects expenses for a given income stream within a date range.
+ * Single canonical source — import this everywhere instead of inlining the filter.
+ */
+export function getConnectsMonthly(
+  expenses: Expense[],
+  incomeStreamId: number,
+  mStart: string,
+  mEnd: string
+): number {
+  return expenses
+    .filter(e =>
+      (e.category === 'Variable: Connects' || e.category === 'Connects') &&
+      Number(e.income_stream_id) === Number(incomeStreamId) &&
+      e.date >= mStart && e.date <= mEnd
+    )
+    .reduce((s, e) => s + Number(e.amount), 0);
+}
+
 export function calculateRevenueDetails(
   revenue: Revenue,
   stream: IncomeStream,

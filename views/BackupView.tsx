@@ -21,6 +21,8 @@ const BackupView: React.FC = () => {
   const [msg, setMsg] = useState('');
   const [success, setSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showImportConfirm, setShowImportConfirm] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({
     revenues: 0,
     projects: 0,
@@ -119,37 +121,39 @@ const BackupView: React.FC = () => {
     }
   };
 
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!confirm('CAUTION: Importing data will overwrite or merge records based on IDs. It is highly recommended to Export a backup first. Continue?')) {
-      if (e.target) e.target.value = '';
-      return;
-    }
+    // Show confirmation modal instead of confirm()
+    setImportFile(file);
+    setShowImportConfirm(true);
+  };
 
+  const runImport = async (file: File) => {
     setLoading(true);
     setMsg('Initializing System Recovery...');
     setSuccess(false);
+    setShowImportConfirm(false);
 
     try {
       const reader = new FileReader();
       reader.onload = async (event) => {
         try {
           const rawData = JSON.parse(event.target?.result as string);
-          
+
           // STRICT ORDER for foreign keys
           const tableOrder = [
-            'users', 
-            'team_members', 
-            'income_streams', 
-            'revenues', 
-            'projects', 
-            'expenses', 
+            'users',
+            'team_members',
+            'income_streams',
+            'revenues',
+            'projects',
+            'expenses',
             'recurring_expenses',
-            'project_allocations', 
-            'production_payments', 
-            'payment_project_rows', 
+            'project_allocations',
+            'production_payments',
+            'payment_project_rows',
             'other_payments',
             'project_revenue_links'
           ];
@@ -159,15 +163,15 @@ const BackupView: React.FC = () => {
             const records = rawData[table];
             if (records && Array.isArray(records) && records.length > 0) {
               setMsg(`Restoring ${table} (${records.length} items)...`);
-              
+
               const chunkSize = 100;
               for (let i = 0; i < records.length; i += chunkSize) {
                 const chunk = records.slice(i, i + chunkSize);
-                const { error } = await supabase.from(table).upsert(chunk, { 
+                const { error } = await supabase.from(table).upsert(chunk, {
                   onConflict: 'id',
-                  ignoreDuplicates: false 
+                  ignoreDuplicates: false
                 });
-                
+
                 if (error) {
                   console.error(`Error importing ${table}:`, error);
                   throw new Error(`Conflict in ${table}: ${error.message}`);
@@ -185,15 +189,23 @@ const BackupView: React.FC = () => {
           setMsg(`Recovery Failed: ${err.message}`);
         } finally {
           setLoading(false);
-          if (e.target) e.target.value = '';
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          setImportFile(null);
         }
       };
       reader.readAsText(file);
     } catch (err) {
       setMsg('Error parsing file.');
       setLoading(false);
-      if (e.target) e.target.value = '';
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setImportFile(null);
     }
+  };
+
+  const handleCancelImport = () => {
+    setShowImportConfirm(false);
+    setImportFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
@@ -261,6 +273,66 @@ const BackupView: React.FC = () => {
             {success ? <CheckCircle2 size={24} /> : <AlertCircle size={24} className="animate-pulse" />}
           </div>
           {msg}
+        </div>
+      )}
+
+      {/* Import Confirmation Modal */}
+      {showImportConfirm && importFile && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-in scale-in-95 duration-200">
+            <h3 className="text-2xl font-black text-[#0f172a] mb-4 flex items-center gap-2">
+              <AlertCircle size={28} className="text-amber-500" />
+              Confirm Data Import
+            </h3>
+            <div className="space-y-4 mb-6">
+              <p className="text-slate-600 font-medium">
+                This will overwrite existing records where IDs match. Current record counts:
+              </p>
+              <div className="bg-slate-50 rounded-lg p-4 space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Revenues:</span>
+                  <span className="font-black text-slate-900">{counts.revenues}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Projects:</span>
+                  <span className="font-black text-slate-900">{counts.projects}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Expenses:</span>
+                  <span className="font-black text-slate-900">{counts.expenses}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Outgoing Payments:</span>
+                  <span className="font-black text-slate-900">{counts.production_payments}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Other Payments:</span>
+                  <span className="font-black text-slate-900">{counts.other_payments}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Team Members:</span>
+                  <span className="font-black text-slate-900">{counts.team_members}</span>
+                </div>
+              </div>
+              <p className="text-xs text-red-600 font-black uppercase tracking-widest">
+                This action cannot be undone. Export a backup first if you haven't already.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={handleCancelImport}
+                className="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-900 rounded-lg font-black text-sm uppercase tracking-wider transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => runImport(importFile)}
+                className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-black text-sm uppercase tracking-wider transition-all shadow-lg"
+              >
+                Yes, Import & Overwrite
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

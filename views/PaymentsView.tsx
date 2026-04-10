@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useMemo, useContext } from 'react';
 import { supabase, db } from '../lib/supabase';
-import { TeamMember, Project, ProjectAllocation, Revenue, IncomeStream, ProductionPayment, OtherPayment, Expense, FinancialGoal } from '../types';
-import { calculateRevenueDetails, extractPaidIds } from '../utils/calculations';
+import { TeamMember, Project, ProjectAllocation, Revenue, IncomeStream, ProductionPayment, OtherPayment, Expense, FinancialGoal, User } from '../types';
+import { calculateRevenueDetails, extractPaidIds, getConnectsMonthly } from '../utils/calculations';
 import SearchableSelect from '../components/SearchableSelect';
 import Modal from '../components/Modal';
 import { jsPDF } from 'jspdf';
@@ -29,10 +29,13 @@ import {
 interface PaymentsViewProps {
   globalStart: string;
   globalEnd: string;
+  currentUser?: User | null;
 }
 
 
-const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) => {
+const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, currentUser }) => {
+  const isPartner = currentUser?.user_type === 'partner';
+  const partnerStreamIds = isPartner ? (currentUser?.linked_income_stream_ids || []) : null;
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [allocations, setAllocations] = useState<ProjectAllocation[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -93,8 +96,8 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
       setTeamMembers(members); 
       setAllocations(allocs); 
       setProjects(projs); 
-      setRevenues(revs);
-      setIncomeStreams(streams); 
+      setRevenues(partnerStreamIds ? (revs || []).filter((r: Revenue) => partnerStreamIds.includes(r.income_stream_id)) : revs);
+      setIncomeStreams(partnerStreamIds ? (streams || []).filter((s: IncomeStream) => partnerStreamIds.includes(s.id)) : streams);
       setExpenses(exps); 
       setPayments(pymts); 
       setOtherPayments(others.data || []);
@@ -192,10 +195,8 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
              const rule = stream.commission_structure?.find((r: any) => r.name === member.name);
 
              if (rule?.deductConnects && !processedConnects.has(periodKey)) {
-                 const connectsMonthly = expenses
-                    .filter(e => (e.category === 'Variable: Connects' || e.category === 'Connects') && Number(e.income_stream_id) === Number(rev.income_stream_id) && e.date.startsWith(rev.date.substring(0, 7)))
-                    .reduce((s, e) => s + Number(e.amount), 0);
-                 
+                 const ym = rev.date.substring(0, 7);
+                 const connectsMonthly = getConnectsMonthly(expenses, Number(rev.income_stream_id), `${ym}-01`, `${ym}-31`);
                  const share = connectsMonthly * (Number(rule.value) / 100);
                  if (share > 0) {
                     cardConnectsDeduction += share;
@@ -290,14 +291,12 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
         const rule = stream.commission_structure?.find((r: any) => r.name === selectedMember.name);
         
         if (rule?.deductConnects && !processedConnects.has(periodKey)) {
-          const connectsMonthly = expenses
-            .filter(e => (e.category === 'Variable: Connects' || e.category === 'Connects') && Number(e.income_stream_id) === Number(rev.income_stream_id) && e.date.startsWith(rev.date.substring(0, 7)))
-            .reduce((s, e) => s + Number(e.amount), 0);
-          
+          const ym = rev.date.substring(0, 7);
+          const connectsMonthly = getConnectsMonthly(expenses, Number(rev.income_stream_id), `${ym}-01`, `${ym}-31`);
           const share = connectsMonthly * (Number(rule.value) / 100);
           if (share > 0) {
             connectsTotal += share;
-            deductionItems.push({ type: 'Connects', label: `${stream.name} - ${rev.date.substring(0, 7)}`, amount: share });
+            deductionItems.push({ type: 'Connects', label: `${stream.name} - ${ym}`, amount: share });
             processedConnects.add(periodKey);
           }
         }
@@ -412,10 +411,8 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
               const rule = stream.commission_structure?.find((r: any) => r.name === memberName);
               
               if (rule?.deductConnects && !processedConnects.has(periodKey)) {
-                const connectsMonthly = expenses
-                  .filter(e => (e.category === 'Variable: Connects' || e.category === 'Connects') && Number(e.income_stream_id) === Number(rev.income_stream_id) && e.date.startsWith(rev.date.substring(0, 7)))
-                  .reduce((s, e) => s + Number(e.amount), 0);
-                
+                const ym = rev.date.substring(0, 7);
+                const connectsMonthly = getConnectsMonthly(expenses, Number(rev.income_stream_id), `${ym}-01`, `${ym}-31`);
                 const share = connectsMonthly * (Number(rule.value) / 100);
                 if (share > 0) {
                   connectsTotal += share;
@@ -526,17 +523,21 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd }) =
         paid_revenue_commission_ids: combinedPaidIds
       };
 
-      const { data: p, error: insertError } = await supabase.from('production_payments').insert(payload).select().single();
-      
-      if (insertError) {
-        console.error('Insert error:', insertError);
-        throw new Error(insertError.message);
-      }
-      
-      if (!p) throw new Error("Failed to create payment record");
+      const { error: rpcErr } = await supabase.rpc('create_settlement', {
+        p_date:                         payload.date,
+        p_payment_type:                 payload.payment_type,
+        p_recipient_id:                 payload.recipient_id,
+        p_recipient_name:               payload.recipient_name,
+        p_total_amount:                 payload.total_amount,
+        p_payment_method:               payload.payment_method,
+        p_notes:                        payload.notes,
+        p_paid_revenue_commission_ids:  payload.paid_revenue_commission_ids,
+        p_other_payment_ids:            otherToMark.length > 0 ? otherToMark : [],
+      });
 
-      if (otherToMark.length > 0) {
-        await supabase.from('other_payments').update({ is_paid: true, settled_in_payment_id: p.id }).in('id', otherToMark);
+      if (rpcErr) {
+        console.error('Settlement RPC error:', rpcErr);
+        throw new Error(rpcErr.message);
       }
       
       await loadData(); 

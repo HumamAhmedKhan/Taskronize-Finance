@@ -325,28 +325,29 @@ const WithdrawalsView: React.FC = () => {
         date: wForm.date,
       };
 
-      const { error: wErr } = await supabase.from('withdrawals').insert([newWithdrawal]);
-      if (wErr) throw wErr;
+      const srcBank = wForm.from_type === 'bank' ? banks.find(b => b.id === parseInt(wForm.from_id)) : null;
+      const dstDelta = isToLocal ? (netPkrRemaining ?? localAmount ?? 0) : netAmount;
 
-      // Update source bank balance if from bank
-      if (wForm.from_type === 'bank') {
-        const srcBank = banks.find(b => b.id === parseInt(wForm.from_id));
-        if (srcBank) {
-          const { error: srcErr } = await supabase.from('banks').update({ balance: Number(srcBank.balance) - usdAmount }).eq('id', srcBank.id);
-          if (srcErr) throw srcErr;
-        }
-      }
-
-      // Update dest bank balance:
-      // Local bank receives net_pkr_remaining (PKR received minus PKR paid out to team/partners)
-      // US bank receives net USD
-      const destBank = banks.find(b => b.id === toId);
-      if (destBank) {
-        const addAmount = isToLocal ? (netPkrRemaining ?? localAmount ?? 0) : netAmount;
-        console.log('[Withdrawal] destBank:', destBank.name, 'current balance:', destBank.balance, 'addAmount:', addAmount, 'netPkrRemaining:', netPkrRemaining, 'localAmount:', localAmount, 'totalPkrPaidOut:', totalPkrPaidOut);
-        const { error: dstErr } = await supabase.from('banks').update({ balance: Number(destBank.balance) + addAmount }).eq('id', destBank.id);
-        if (dstErr) throw dstErr;
-      }
+      const { error: rpcErr } = await supabase.rpc('process_withdrawal', {
+        p_from_type:      newWithdrawal.from_type,
+        p_from_id:        newWithdrawal.from_id,
+        p_to_type:        newWithdrawal.to_type,
+        p_to_id:          newWithdrawal.to_id,
+        p_usd_amount:     newWithdrawal.usd_amount,
+        p_local_amount:   newWithdrawal.local_amount,
+        p_exchange_rate:  newWithdrawal.exchange_rate,
+        p_fee_type:       newWithdrawal.fee_type,
+        p_fee_value:      newWithdrawal.fee_value,
+        p_fee_amount:     newWithdrawal.fee_amount,
+        p_net_amount:     newWithdrawal.net_amount,
+        p_status:         newWithdrawal.status,
+        p_settlement_ids: JSON.stringify(newWithdrawal.settlement_ids),
+        p_date:           newWithdrawal.date,
+        p_src_bank_id:    srcBank?.id ?? null,
+        p_src_delta:      srcBank ? -usdAmount : 0,
+        p_dst_delta:      dstDelta,
+      });
+      if (rpcErr) throw rpcErr;
 
       setShowWithdrawModal(false);
       await loadData();
@@ -396,24 +397,19 @@ const WithdrawalsView: React.FC = () => {
     if (!confirm('Cancel this withdrawal? Balances will be restored.')) return;
     setCancelLoading(true);
     try {
-      await supabase.from('withdrawals').update({ status: 'cancelled' }).eq('id', w.id);
-
-      // Restore source bank if from bank
-      if (w.from_type === 'bank') {
-        const srcBank = banks.find(b => b.id === parseInt(w.from_id));
-        if (srcBank) {
-          await supabase.from('banks').update({ balance: srcBank.balance + w.usd_amount }).eq('id', srcBank.id);
-        }
-      }
-
-      // Restore dest bank — for local banks, only net_pkr_remaining was added (not full local_amount)
+      const srcBank = w.from_type === 'bank' ? banks.find(b => b.id === parseInt(w.from_id)) : null;
       const destBank = banks.find(b => b.id === w.to_id);
-      if (destBank) {
-        const isLocal = destBank.type === 'local';
-        const pkrPaidOut = totalPkrOut(w.settlement_ids || []);
-        const removeAmount = isLocal ? (w.local_amount ?? 0) - pkrPaidOut : (w.net_amount ?? 0);
-        await supabase.from('banks').update({ balance: destBank.balance - removeAmount }).eq('id', destBank.id);
-      }
+      const isLocal = destBank?.type === 'local';
+      const pkrPaidOut = totalPkrOut(w.settlement_ids || []);
+      const removeAmount = isLocal ? (w.local_amount ?? 0) - pkrPaidOut : (w.net_amount ?? 0);
+
+      const { error: rpcErr } = await supabase.rpc('cancel_withdrawal', {
+        p_withdrawal_id: w.id,
+        p_src_bank_id:   srcBank?.id ?? null,
+        p_src_delta:     srcBank ? w.usd_amount : 0,
+        p_dst_delta:     -removeAmount,
+      });
+      if (rpcErr) throw rpcErr;
 
       setDetailWithdrawal(null);
       await loadData();

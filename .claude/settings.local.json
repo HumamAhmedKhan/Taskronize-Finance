@@ -10,7 +10,27 @@
       "Bash(npx tsc:*)",
       "Bash(node:*)",
       "Bash(node -e \"const t = require\\(''''@tiptap/extension-bubble-menu''''\\); const r = require\\(''''@tiptap/react''''\\); console.log\\(''''BubbleMenu in ext:'''', typeof t.BubbleMenu, ''''| ReactRenderer:'''', typeof r.ReactRenderer\\)\")",
-      "Bash(npx vite:*)"
+      "Bash(npx vite:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(find /Users/humamahmedkhan/taskronize2 -type f -path */supabase/*)",
+      "Bash(find /Users/humamahmedkhan/taskronize2 -type f -name *supabase* \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(find /Users/humamahmedkhan/taskronize2 -type f -name types* \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(grep -r paid_revenue_commission_ids /Users/humamahmedkhan/taskronize2 --include=*.tsx --include=*.ts)",
+      "Bash(grep -E \"\\\\.ts$|\\\\.js$|script\")",
+      "Bash(find /Users/humamahmedkhan/taskronize2 -type f \\\\\\(-name *.sql -o -name *schema* \\\\\\) ! -path */node_modules/*)",
+      "Bash(curl:*)",
+      "Bash(LC_ALL=C grep -n \"payment\\\\|breakdown\\\\|allocation\\\\|ALLOC\\\\|paid\" /Users/humamahmedkhan/taskronize2/views/ProjectManagementView.tsx)",
+      "Bash(LC_ALL=C grep -n \"Team Breakdown\\\\|handleEdit\\\\|production_payments\\\\|other_payments\\\\|DUE\\\\|paid_revenue\" /Users/humamahmedkhan/taskronize2/views/PaymentsView.tsx)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//Users/humamahmedkhan/taskronize2/**)",
+      "Bash(done)",
+      "Bash(LC_ALL=C grep -n \"Team Breakdown\\\\|handleEdit\\\\|production_payments\\\\|other_payments\\\\|DUE\\\\|ALLOC\\\\|paid_amount\" /Users/humamahmedkhan/taskronize2/views/ProjectsView.tsx)",
+      "Bash(grep:*)",
+      "Bash(ls -la /Users/humamahmedkhan/taskronize2/views/WithdrawalsView.*)",
+      "Bash(claude mcp:*)"
     ]
   }
 }

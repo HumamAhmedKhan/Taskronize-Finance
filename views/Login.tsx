@@ -31,14 +31,24 @@ const Login: React.FC = () => {
 
       // Check password using bcrypt
       let isValid = false;
+      let isPlaintext = false;
       if (data.password_hash.startsWith('$2a$') || data.password_hash.startsWith('$2b$')) {
         isValid = await bcrypt.compare(password, data.password_hash);
       } else {
         // Fallback for plain text passwords (legacy)
         isValid = password === data.password_hash;
+        isPlaintext = true;
       }
 
       if (isValid) {
+        // If plaintext password was matched, silently migrate to bcrypt hash
+        if (isPlaintext) {
+          const salt = await bcrypt.genSalt(10);
+          const hashedPassword = await bcrypt.hash(password, salt);
+          supabase.from('users').update({ password_hash: hashedPassword }).eq('id', data.id).catch((err) => {
+            console.error('Failed to migrate password hash:', err);
+          });
+        }
         auth?.login(data);
       } else {
         throw new Error('Invalid credentials');

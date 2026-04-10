@@ -114,8 +114,11 @@ const App: React.FC = () => {
         setChangePwError('Current password is incorrect.');
         return;
       }
-      await supabase.from('users').update({ password_hash: changePwForm.newPassword }).eq('id', user!.id);
-      const updatedUser = { ...user!, password_hash: changePwForm.newPassword };
+      // Hash new password before saving
+      const salt = await bcrypt.genSalt(10);
+      const newPasswordHash = await bcrypt.hash(changePwForm.newPassword, salt);
+      await supabase.from('users').update({ password_hash: newPasswordHash }).eq('id', user!.id);
+      const updatedUser = { ...user!, password_hash: newPasswordHash };
       setUser(updatedUser);
       localStorage.setItem('taskronize_user', JSON.stringify(updatedUser));
       setShowChangePasswordModal(false);
@@ -185,7 +188,7 @@ const App: React.FC = () => {
       case 'revenue': return <RevenueView globalStart={startDate} globalEnd={endDate} currentUser={user} />;
       case 'projects': return <ProjectsView globalStart={startDate} globalEnd={endDate} currentUser={user} />;
       case 'projectManagement': return <ProjectManagementView globalStart={startDate} globalEnd={endDate} currentUser={user} />;
-      case 'payments': return <PaymentsView globalStart={startDate} globalEnd={endDate} />;
+      case 'payments': return <PaymentsView globalStart={startDate} globalEnd={endDate} currentUser={user} />;
       case 'expenses': return <ExpensesView globalStart={startDate} globalEnd={endDate} />;
       case 'team': return <TeamView />;
       case 'users': return <UsersView />;

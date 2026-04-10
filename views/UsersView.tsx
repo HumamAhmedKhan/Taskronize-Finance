@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useContext } from 'react';
+import bcrypt from 'bcryptjs';
 import { supabase, db } from '../lib/supabase';
 import { User, PagePermissions, PermissionLevel, IncomeStream } from '../types';
 import { AuthContext } from '../App';
@@ -84,9 +85,18 @@ const UsersView: React.FC = () => {
       }
 
       if (dataToSave.id) {
-        if (resetPassword) dataToSave.password_hash = resetPassword;
+        if (resetPassword) {
+          // Hash password before saving on reset
+          const salt = await bcrypt.genSalt(10);
+          dataToSave.password_hash = await bcrypt.hash(resetPassword, salt);
+        }
         await db.update('users', dataToSave.id, dataToSave);
       } else {
+        // Hash password before saving on new user creation
+        if (dataToSave.password_hash) {
+          const salt = await bcrypt.genSalt(10);
+          dataToSave.password_hash = await bcrypt.hash(dataToSave.password_hash, salt);
+        }
         await db.insert('users', dataToSave);
       }
       setShowModal(false);

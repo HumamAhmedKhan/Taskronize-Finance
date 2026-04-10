@@ -139,35 +139,71 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
       if (formData.id) {
         await db.update('projects', formData.id, payload as any);
         projectId = formData.id;
-        // Clean slate for allocations and links
-        await supabase.from('project_allocations').delete().eq('project_id', projectId);
-        await supabase.from('project_revenue_links').delete().eq('project_id', projectId);
+
+        // ALLOCATIONS — insert new + update existing FIRST, then delete removed
+        // This ensures we never lose data if a write fails mid-way.
+        const validAllocs = formAllocations.filter(a => a.team_member_id && a.team_member_id > 0 && a.amount && a.amount > 0);
+        const allocsToUpdate = validAllocs.filter(a => a.id);
+        const allocsToInsert = validAllocs.filter(a => !a.id);
+
+        for (const alloc of allocsToUpdate) {
+          const { error } = await supabase.from('project_allocations').update({
+            team_member_id: alloc.team_member_id,
+            amount: alloc.amount,
+            role: alloc.role || 'Production'
+          }).eq('id', alloc.id!);
+          if (error) throw error;
+        }
+
+        if (allocsToInsert.length > 0) {
+          const { error } = await supabase.from('project_allocations').insert(
+            allocsToInsert.map(a => ({ project_id: projectId, team_member_id: a.team_member_id, amount: a.amount, role: a.role || 'Production' }))
+          );
+          if (error) throw error;
+        }
+
+        // Only delete allocations removed from the form — after inserts succeed
+        const keptIds = new Set(allocsToUpdate.map(a => a.id));
+        const { data: currentAllocs } = await supabase.from('project_allocations').select('id').eq('project_id', projectId);
+        const toDeleteAllocIds = (currentAllocs || []).filter(a => !keptIds.has(a.id)).map(a => a.id);
+        if (toDeleteAllocIds.length > 0) {
+          await supabase.from('project_allocations').delete().in('id', toDeleteAllocIds);
+        }
+
+        // REVENUE LINKS — insert new FIRST, then delete removed
+        const existingRevIds = new Set(allLinks.filter(l => l.project_id === projectId).map(l => l.revenue_id));
+        const newRevIds = formLinks.filter(rid => !existingRevIds.has(rid));
+        const removedRevIds = [...existingRevIds].filter(rid => !formLinks.includes(rid));
+
+        if (newRevIds.length > 0) {
+          const { error } = await supabase.from('project_revenue_links').insert(
+            newRevIds.map(rid => ({ project_id: projectId, revenue_id: rid }))
+          );
+          if (error) throw error;
+        }
+
+        if (removedRevIds.length > 0) {
+          await supabase.from('project_revenue_links').delete().eq('project_id', projectId).in('revenue_id', removedRevIds);
+        }
       } else {
         const newProj = await db.insert<Project>('projects', { ...payload, folders_creating: true });
         projectId = newProj.id;
-      }
 
-      // Explicitly pick fields to avoid sending IDs or created_at timestamps
-      if (formAllocations.length > 0) {
-        const payload = formAllocations
-          .filter(a => a.team_member_id && a.team_member_id > 0 && a.amount && a.amount > 0)
-          .map(a => ({
-            project_id: projectId,
-            team_member_id: a.team_member_id,
-            amount: a.amount,
-            role: a.role || 'Production'
-          }));
-        
-        if (payload.length > 0) {
-          const { error: allocError } = await supabase.from('project_allocations').insert(payload);
-          if (allocError) throw allocError;
+        if (formAllocations.length > 0) {
+          const allocPayload = formAllocations
+            .filter(a => a.team_member_id && a.team_member_id > 0 && a.amount && a.amount > 0)
+            .map(a => ({ project_id: projectId, team_member_id: a.team_member_id, amount: a.amount, role: a.role || 'Production' }));
+          if (allocPayload.length > 0) {
+            const { error: allocError } = await supabase.from('project_allocations').insert(allocPayload);
+            if (allocError) throw allocError;
+          }
         }
-      }
 
-      if (formLinks.length > 0) {
-        const linkPayload = formLinks.map(rid => ({ project_id: projectId, revenue_id: rid }));
-        const { error: linkError } = await supabase.from('project_revenue_links').insert(linkPayload);
-        if (linkError) throw linkError;
+        if (formLinks.length > 0) {
+          const linkPayload = formLinks.map(rid => ({ project_id: projectId, revenue_id: rid }));
+          const { error: linkError } = await supabase.from('project_revenue_links').insert(linkPayload);
+          if (linkError) throw linkError;
+        }
       }
 
       setShowModal(false);
@@ -409,10 +445,10 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         />
       </div>
 
-      <Modal 
-        title={formData.id ? 'Edit Project' : 'Record New Project'} 
-        isOpen={showModal} 
-        onClose={() => { setShowModal(false); setEditingId(null); }}
+      <Modal
+        title={formData.id ? 'Edit Project' : 'Record New Project'}
+        isOpen={showModal}
+        onClose={() => { setShowModal(false); setEditingId(null); setFormAllocations([]); }}
         onSave={handleSave} 
         saveLabel="Save"
         maxWidth="max-w-2xl"
