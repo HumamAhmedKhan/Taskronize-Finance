@@ -1,6 +1,5 @@
 
 import React, { useState, useEffect, useContext } from 'react';
-import bcrypt from 'bcryptjs';
 import { supabase, db } from '../lib/supabase';
 import { User, PagePermissions, PermissionLevel, IncomeStream } from '../types';
 import { AuthContext } from '../App';
@@ -11,6 +10,7 @@ const UsersView: React.FC = () => {
   const [incomeStreams, setIncomeStreams] = useState<IncomeStream[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [formData, setFormData] = useState<Partial<User>>({
     name: '',
     username: '',
@@ -86,26 +86,22 @@ const UsersView: React.FC = () => {
 
       if (dataToSave.id) {
         if (resetPassword) {
-          // Hash password before saving on reset
-          const salt = await bcrypt.genSalt(10);
-          dataToSave.password_hash = await bcrypt.hash(resetPassword, salt);
+          dataToSave.password_hash = resetPassword;
         }
-        await db.update('users', dataToSave.id, dataToSave);
+        const updatedUser = await db.update<User>('users', dataToSave.id, dataToSave);
+        setUsers(prev => prev.map(u => u.id === updatedUser.id ? updatedUser : u));
       } else {
-        // Hash password before saving on new user creation
-        if (dataToSave.password_hash) {
-          const salt = await bcrypt.genSalt(10);
-          dataToSave.password_hash = await bcrypt.hash(dataToSave.password_hash, salt);
-        }
         await db.insert('users', dataToSave);
+        await loadData();
       }
       setShowModal(false);
       setResetPassword('');
-      loadData();
-      alert('User updated. They may need to log out and back in to see changes.');
+      setToast({ message: 'User updated. They may need to log out and back in to see changes.', type: 'success' });
+      setTimeout(() => setToast(null), 4000);
     } catch (err: any) {
       console.error('Save user error:', err);
-      alert(`Error saving user: ${err?.message || JSON.stringify(err)}`);
+      setToast({ message: `Error saving user: ${err?.message || JSON.stringify(err)}`, type: 'error' });
+      setTimeout(() => setToast(null), 5000);
     }
   };
 
@@ -156,6 +152,11 @@ const UsersView: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {toast && (
+        <div className={`fixed top-6 right-6 z-[9999] px-5 py-3 rounded-xl shadow-xl text-sm font-semibold transition-all ${toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
+          {toast.message}
+        </div>
+      )}
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-bold text-slate-800">System Users</h2>
@@ -279,6 +280,17 @@ const UsersView: React.FC = () => {
                     placeholder={formData.id ? 'New password (optional)...' : 'Set temporary password'}
                   />
                 </div>
+
+                {auth?.user?.user_type === 'admin' && formData.id && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Current Password</label>
+                    <div className="w-full px-4 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-600 font-mono text-sm">
+                      {formData.password_hash?.startsWith('$2a$') || formData.password_hash?.startsWith('$2b$')
+                        ? '(set before plaintext storage — reset to set a readable one)'
+                        : (formData.password_hash || '(not set)')}
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">User Type</label>

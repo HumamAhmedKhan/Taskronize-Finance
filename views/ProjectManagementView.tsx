@@ -268,10 +268,10 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
         let filteredProjects = rawProjects;
         if (currentUser && currentUser.user_type !== 'admin') {
           if (currentUser.user_type === 'partner') {
-            // Partners see all projects from their linked income streams
+            // Partners see all projects from their linked income streams (including projects with NULL income_stream_id)
             const partnerStreamIds: number[] = currentUser.linked_income_stream_ids || [];
             filteredProjects = partnerStreamIds.length > 0
-              ? rawProjects.filter(p => partnerStreamIds.includes(p.income_stream_id))
+              ? rawProjects.filter(p => !p.income_stream_id || partnerStreamIds.includes(p.income_stream_id))
               : rawProjects;
           } else {
             // Team members see only projects they are allocated to

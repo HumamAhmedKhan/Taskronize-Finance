@@ -74,7 +74,10 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
       
       let filteredProjects = projData.data || [];
       if (currentUser.user_type === 'partner') {
-        filteredProjects = filteredProjects.filter(p => currentUser.linked_income_stream_ids?.includes(p.income_stream_id));
+        const partnerStreamIds = currentUser.linked_income_stream_ids || [];
+        filteredProjects = partnerStreamIds.length > 0
+          ? filteredProjects.filter(p => !p.income_stream_id || partnerStreamIds.includes(p.income_stream_id))
+          : filteredProjects;
       }
 
       const parsedProjects = filteredProjects.map(p => {
@@ -344,14 +347,14 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
           </div>
           <div className="flex gap-3">
             {(!currentUser || currentUser.user_type === 'admin') && (
-              <>
-                <button onClick={() => setShowImportModal(true)} className="flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
-                  <FileText size={16} /> Bulk AI Import
-                </button>
-                <button onClick={() => { setFormData(initialForm); setFormAllocations([]); setFormLinks([]); setEditingId(null); setShowModal(true); }} className="flex items-center gap-2 bg-gray-900 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all">
-                  <Plus size={16} /> New Project
-                </button>
-              </>
+              <button onClick={() => setShowImportModal(true)} className="flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
+                <FileText size={16} /> Bulk AI Import
+              </button>
+            )}
+            {(!currentUser || currentUser.user_type === 'admin' || currentUser.user_type === 'partner') && (
+              <button onClick={() => { setFormData(initialForm); setFormAllocations([]); setFormLinks([]); setEditingId(null); setShowModal(true); }} className="flex items-center gap-2 bg-gray-900 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all">
+                <Plus size={16} /> New Project
+              </button>
             )}
           </div>
         </header>

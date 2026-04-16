@@ -194,17 +194,11 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
       totalConnectsDeduction += connectsCost * (Number(rule.value) / 100);
     });
 
-    // ── Total paid: sum directly from production_payments records (source of truth) ──
-    const filteredPayments = timeframe === 'month'
-      ? partnerPayments.filter((p: any) => p.date >= globalStart && p.date <= globalEnd)
-      : partnerPayments;
-    const totalPaid = filteredPayments
-      .reduce((s: number, p: any) => s + Number(p.total_amount || 0), 0);
-
     // ── Per-row calculations (production deduction only, no connects) ──
     let totalGross = 0;
     let totalProductionDeduction = 0;
     let totalNet = 0;
+    let totalPaid = 0; // derived from per-row isPaid, not from payment dates
 
     // Sort revenues oldest-first so the earliest installment carries the production deduction
     const revenuesSortedAsc = [...filteredRevenues].sort((a, b) =>
@@ -261,7 +255,7 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
 
       // Payment tracking
       const key = `${rev.id}-${partnerName}`;
-      const isPaid = filteredPayments.some((p: any) => p.paid_revenue_commission_ids?.includes(key));
+      const isPaid = partnerPayments.some((p: any) => p.paid_revenue_commission_ids?.includes(key));
       const amountPaid = isPaid ? netCommission : 0;
       const pending = Math.max(0, netCommission - amountPaid);
 
@@ -271,6 +265,7 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
       totalGross += grossCommission;
       totalProductionDeduction += productionDeduction;
       totalNet += netCommission;
+      totalPaid += amountPaid;
 
       return {
         id: rev.id,
@@ -286,8 +281,8 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
       };
     }).filter(Boolean).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    // Pending balance = net earnings - connects deduction - amount already paid
-    const pendingBalance = Math.max(0, totalNet - totalConnectsDeduction - totalPaid);
+    // Pending balance = gross - production - connects deduction - amount already paid
+    const pendingBalance = Math.max(0, totalGross - totalProductionDeduction - totalConnectsDeduction - totalPaid);
 
     return (
       <div className="space-y-6 max-w-7xl mx-auto w-full font-manrope">
@@ -333,7 +328,7 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
           </div>
           <div className="bg-slate-900 p-5 rounded-2xl shadow-sm">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Net Commission</h3>
-            <div className="text-xl font-black text-white">{formatCurrency(totalNet)}</div>
+            <div className="text-xl font-black text-white">{formatCurrency(Math.max(0, totalGross - totalProductionDeduction))}</div>
           </div>
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Total Paid</h3>
@@ -440,7 +435,7 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
                       {new Date(p.date).toLocaleDateString()}
                     </td>
                     <td className="p-4 font-bold text-emerald-600">{formatCurrency(Number(p.total_amount || 0))}</td>
-                    <td className="p-4 text-sm text-slate-600">{p.notes || '—'}</td>
+                    <td className="p-4 text-sm text-slate-600">{p.notes ? p.notes.replace(/\s*PaidIDs:\[.*?\]/, '').trim() : '—'}</td>
                     <td className="p-4 text-sm text-slate-500">{p.recorded_by || p.admin_name || '—'}</td>
                   </tr>
                 ))}

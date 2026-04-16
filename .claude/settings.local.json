@@ -30,7 +30,12 @@
       "Bash(LC_ALL=C grep -n \"Team Breakdown\\\\|handleEdit\\\\|production_payments\\\\|other_payments\\\\|DUE\\\\|ALLOC\\\\|paid_amount\" /Users/humamahmedkhan/taskronize2/views/ProjectsView.tsx)",
       "Bash(grep:*)",
       "Bash(ls -la /Users/humamahmedkhan/taskronize2/views/WithdrawalsView.*)",
-      "Bash(claude mcp:*)"
+      "Bash(claude mcp:*)",
+      "Bash(python3 -m json.tool)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "gemini-cli"
+  ]
 }
