@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
-import { User, TeamMember, Project, TeamTask } from '../types';
+import { supabase, createNotification, parseMentionUsernames } from '../lib/supabase';
+import { User, TeamMember, Project, TeamTask, TaskComment } from '../types';
 
 interface TeamTaskRow extends TeamTask {
   assignees: { team_member_id: number; name: string }[];
@@ -76,6 +76,9 @@ const TeamTasksView: React.FC<TeamTasksViewProps> = ({ currentUser }) => {
   const [editTask, setEditTask] = useState<TeamTaskRow | null>(null);
   const [editForm, setEditForm] = useState<AddForm>({ title: '', project_id: '', assignee_ids: [], due_date: '', priority: 'medium', status: 'todo' });
   const [editSaving, setEditSaving] = useState(false);
+  const [editComments, setEditComments] = useState<TaskComment[]>([]);
+  const [newComment, setNewComment] = useState('');
+  const [commentSaving, setCommentSaving] = useState(false);
 
   const loadAll = async () => {
     setLoading(true);
@@ -154,7 +157,7 @@ const TeamTasksView: React.FC<TeamTasksViewProps> = ({ currentUser }) => {
     setTasks(prev => prev.filter(t => t.id !== id));
   };
 
-  const openEditModal = (task: TeamTaskRow) => {
+  const openEditModal = async (task: TeamTaskRow) => {
     setEditTask(task);
     setEditForm({
       title: task.title,
@@ -164,6 +167,64 @@ const TeamTasksView: React.FC<TeamTasksViewProps> = ({ currentUser }) => {
       priority: task.priority,
       status: task.status,
     });
+    setNewComment('');
+    const { data } = await supabase
+      .from('task_comments')
+      .select('*')
+      .eq('task_type', 'team')
+      .eq('task_id', task.id)
+      .order('created_at', { ascending: true });
+    setEditComments(data || []);
+  };
+
+  const handleSaveComment = async () => {
+    if (!editTask || !newComment.trim()) return;
+    setCommentSaving(true);
+    const content = newComment.trim();
+    await supabase.from('task_comments').insert({
+      task_type: 'team',
+      task_id: editTask.id,
+      user_id: currentUser.id,
+      user_name: currentUser.name,
+      content,
+    });
+    const { data } = await supabase
+      .from('task_comments')
+      .select('*')
+      .eq('task_type', 'team')
+      .eq('task_id', editTask.id)
+      .order('created_at', { ascending: true });
+    setEditComments(data || []);
+    setNewComment('');
+    // Notify assignees (except commenter)
+    for (const assignee of editTask.assignees) {
+      const { data: au } = await supabase
+        .from('users').select('id').eq('team_member_id', assignee.team_member_id).maybeSingle();
+      if (au && au.id !== currentUser.id) {
+        await createNotification({
+          user_id: au.id, type: 'comment',
+          actor_id: currentUser.id, actor_name: currentUser.name,
+          message: `${currentUser.name} commented on "${editTask.title}"`,
+          preview: content.slice(0, 100),
+          entity_type: 'team_task', entity_id: editTask.id, entity_name: editTask.title,
+        });
+      }
+    }
+    // @mentions
+    for (const username of parseMentionUsernames(content)) {
+      const { data: mu } = await supabase
+        .from('users').select('id').ilike('username', username).maybeSingle();
+      if (mu && mu.id !== currentUser.id) {
+        await createNotification({
+          user_id: mu.id, type: 'mention',
+          actor_id: currentUser.id, actor_name: currentUser.name,
+          message: `${currentUser.name} mentioned you in "${editTask.title}"`,
+          preview: content.slice(0, 100),
+          entity_type: 'team_task', entity_id: editTask.id, entity_name: editTask.title,
+        });
+      }
+    }
+    setCommentSaving(false);
   };
 
   const handleEditSave = async () => {
@@ -182,8 +243,25 @@ const TeamTasksView: React.FC<TeamTasksViewProps> = ({ currentUser }) => {
         editForm.assignee_ids.map(mid => ({ task_id: editTask.id, team_member_id: mid }))
       );
     }
+    // Notify newly added assignees
+    const prevIds = editTask.assignees.map(a => a.team_member_id);
+    const newAssigneeIds = editForm.assignee_ids.filter(id => !prevIds.includes(id));
+    for (const mid of newAssigneeIds) {
+      const { data: au } = await supabase
+        .from('users').select('id').eq('team_member_id', mid).maybeSingle();
+      if (au && au.id !== currentUser.id) {
+        await createNotification({
+          user_id: au.id, type: 'assigned',
+          actor_id: currentUser.id, actor_name: currentUser.name,
+          message: `${currentUser.name} assigned you to "${editForm.title.trim()}"`,
+          entity_type: 'team_task', entity_id: editTask.id, entity_name: editForm.title.trim(),
+        });
+      }
+    }
     await loadAll();
     setEditTask(null);
+    setEditComments([]);
+    setNewComment('');
     setEditSaving(false);
   };
 
@@ -214,6 +292,19 @@ const TeamTasksView: React.FC<TeamTasksViewProps> = ({ currentUser }) => {
       await supabase.from('team_task_assignees').insert(
         addForm.assignee_ids.map(mid => ({ task_id: newTask.id, team_member_id: mid }))
       );
+      // Notify each assignee (except creator)
+      for (const mid of addForm.assignee_ids) {
+        const { data: au } = await supabase
+          .from('users').select('id').eq('team_member_id', mid).maybeSingle();
+        if (au && au.id !== currentUser.id) {
+          await createNotification({
+            user_id: au.id, type: 'assigned',
+            actor_id: currentUser.id, actor_name: currentUser.name,
+            message: `${currentUser.name} assigned you to "${addForm.title.trim()}"`,
+            entity_type: 'team_task', entity_id: newTask.id, entity_name: addForm.title.trim(),
+          });
+        }
+      }
     }
 
     await loadAll();
@@ -462,7 +553,7 @@ const TeamTasksView: React.FC<TeamTasksViewProps> = ({ currentUser }) => {
           <div className="bg-surface-container-lowest w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
             <div className="px-6 py-4 border-b border-outline-variant/10 flex items-center justify-between">
               <h3 className="font-bold text-on-surface">Edit Task</h3>
-              <button onClick={() => setEditTask(null)} className="p-1 hover:bg-surface-container rounded-lg transition-colors">
+              <button onClick={() => { setEditTask(null); setEditComments([]); setNewComment(''); }} className="p-1 hover:bg-surface-container rounded-lg transition-colors">
                 <span className="material-symbols-outlined text-lg">close</span>
               </button>
             </div>
@@ -557,8 +648,58 @@ const TeamTasksView: React.FC<TeamTasksViewProps> = ({ currentUser }) => {
               </div>
             </div>
 
+            {/* Comment Thread */}
+            <div className="px-6 pb-4 pt-2 border-t border-outline-variant/10 mt-2">
+              <p className="text-[11px] font-bold uppercase tracking-widest text-outline mb-3">Comments</p>
+              {editComments.length > 0 && (
+                <div className="space-y-3 mb-4 max-h-40 overflow-y-auto pr-1">
+                  {editComments.map(c => (
+                    <div key={c.id} className="flex gap-2.5">
+                      <div className="w-7 h-7 rounded-full bg-surface-container flex items-center justify-center shrink-0 text-[10px] font-bold text-on-surface-variant uppercase">
+                        {c.user_name.split(' ').map((n: string) => n[0]).join('').slice(0, 2)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="text-xs font-semibold text-on-surface">{c.user_name}</span>
+                          <span className="text-[10px] text-outline">
+                            {(() => {
+                              const diff = Date.now() - new Date(c.created_at).getTime();
+                              const mins = Math.floor(diff / 60000);
+                              if (mins < 1) return 'Just now';
+                              if (mins < 60) return `${mins}m ago`;
+                              const hrs = Math.floor(mins / 60);
+                              if (hrs < 24) return `${hrs}h ago`;
+                              return `${Math.floor(hrs / 24)}d ago`;
+                            })()}
+                          </span>
+                        </div>
+                        <p className="text-xs text-on-surface-variant mt-0.5 leading-relaxed">{c.content}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2 items-center">
+                <input
+                  type="text"
+                  value={newComment}
+                  onChange={e => setNewComment(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSaveComment()}
+                  placeholder="Add a comment… use @username to mention"
+                  className="flex-1 px-3 py-2 border border-outline-variant rounded-xl text-xs bg-surface-container-low text-on-surface outline-none focus:ring-2 focus:ring-primary/20 placeholder:text-outline/50"
+                />
+                <button
+                  onClick={handleSaveComment}
+                  disabled={!newComment.trim() || commentSaving}
+                  className="px-3 py-2 bg-primary text-on-primary rounded-xl text-xs font-bold disabled:opacity-40 hover:bg-primary-container transition-colors shrink-0"
+                >
+                  {commentSaving ? '…' : 'Post'}
+                </button>
+              </div>
+            </div>
+
             <div className="px-6 py-4 border-t border-outline-variant/10 flex gap-3">
-              <button onClick={() => setEditTask(null)} className="flex-1 py-2.5 px-4 border border-outline-variant rounded-xl text-on-surface font-bold text-sm hover:bg-surface-container transition-colors">
+              <button onClick={() => { setEditTask(null); setEditComments([]); setNewComment(''); }} className="flex-1 py-2.5 px-4 border border-outline-variant rounded-xl text-on-surface font-bold text-sm hover:bg-surface-container transition-colors">
                 Cancel
               </button>
               <button

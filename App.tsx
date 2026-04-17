@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, createContext } from 'react';
+import React, { useState, useEffect, useRef, createContext } from 'react';
 import {
   LayoutDashboard,
   TrendingUp,
@@ -24,7 +24,7 @@ import {
   CheckSquare
 } from 'lucide-react';
 import bcrypt from 'bcryptjs';
-import { User, PagePermissions } from './types';
+import { User, PagePermissions, AppNotification } from './types';
 import { supabase } from './lib/supabase';
 import Login from './views/Login';
 import Dashboard from './views/Dashboard';
@@ -43,6 +43,7 @@ import MyEarningsView from './views/MyEarningsView';
 import AutomationsView from './views/AutomationsView';
 import WithdrawalsView from './views/WithdrawalsView';
 import TasksView from './views/TasksView';
+import NotificationDropdown from './components/NotificationDropdown';
 import { DateShortcuts } from './components/DateShortcuts';
 import Modal from './components/Modal';
 
@@ -71,6 +72,18 @@ const App: React.FC = () => {
   const [changePwForm, setChangePwForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [changePwError, setChangePwError] = useState('');
   const [changePwLoading, setChangePwLoading] = useState(false);
+
+  // Tasks tab state (controlled — lifted so notifications can navigate to specific tab)
+  const [tasksActiveTab, setTasksActiveTab] = useState<'personal' | 'team'>('personal');
+
+  // Notification state
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+  const [notifAdminUserId, setNotifAdminUserId] = useState<number | null>(null);
+  const [notifAllUsers, setNotifAllUsers] = useState<{ id: number; name: string }[]>([]);
+  const [dropdownPos, setDropdownPos] = useState({ top: 80, left: 16 });
+  const bellRef = useRef<HTMLButtonElement>(null);
+  const notifDropdownRef = useRef<HTMLDivElement>(null);
 
   // Derive the first tab a user is allowed to see, used on login and page reload
   const getFirstAccessibleTab = (userData: User): keyof PagePermissions => {
@@ -117,6 +130,89 @@ const App: React.FC = () => {
   const logout = () => {
     setUser(null);
     localStorage.removeItem('taskronize_user');
+  };
+
+  // Derived notification user id (admin can view other users' notifications)
+  const notifUserId = (user?.user_type === 'admin' && notifAdminUserId) ? notifAdminUserId : (user?.id ?? 0);
+  const unreadCount = notifications.filter(n => !n.is_read).length;
+
+  const loadNotifications = async (uid: number) => {
+    // Clean expired notifications
+    await supabase.from('notifications').delete()
+      .eq('user_id', uid)
+      .lt('expires_at', new Date().toISOString());
+    const { data } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', uid)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    setNotifications(data || []);
+  };
+
+  // Load notifications on mount and when admin switches viewed user
+  useEffect(() => {
+    if (!user) return;
+    const uid = (user.user_type === 'admin' && notifAdminUserId) ? notifAdminUserId : user.id;
+    loadNotifications(uid);
+  }, [user?.id, notifAdminUserId]);
+
+  // Load all users for admin dropdown
+  useEffect(() => {
+    if (user?.user_type !== 'admin') return;
+    supabase.from('users').select('id, name').then(({ data }) => {
+      setNotifAllUsers(data || []);
+      setNotifAdminUserId(prev => prev ?? (user?.id ?? null));
+    });
+  }, [user?.id, user?.user_type]);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    if (!showNotifDropdown) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        notifDropdownRef.current && !notifDropdownRef.current.contains(e.target as Node) &&
+        bellRef.current && !bellRef.current.contains(e.target as Node)
+      ) {
+        setShowNotifDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showNotifDropdown]);
+
+  const handleBellClick = () => {
+    if (!showNotifDropdown && bellRef.current) {
+      const rect = bellRef.current.getBoundingClientRect();
+      setDropdownPos({ top: rect.bottom + 8, left: rect.left });
+      loadNotifications(notifUserId);
+    }
+    setShowNotifDropdown(prev => !prev);
+  };
+
+  const handleMarkAllRead = async () => {
+    await supabase.from('notifications').update({ is_read: true })
+      .eq('user_id', notifUserId).eq('is_read', false);
+    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+  };
+
+  const handleMarkNotifRead = async (id: number) => {
+    await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+  };
+
+  const handleNotifClick = async (notif: AppNotification) => {
+    if (!notif.is_read) await handleMarkNotifRead(notif.id);
+    setShowNotifDropdown(false);
+    if (notif.entity_type === 'team_task') {
+      setActiveTab('tasks');
+      setTasksActiveTab('team');
+    } else if (notif.entity_type === 'personal_task') {
+      setActiveTab('tasks');
+      setTasksActiveTab('personal');
+    } else if (notif.entity_type === 'project') {
+      setActiveTab('projectManagement');
+    }
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -229,7 +325,7 @@ const App: React.FC = () => {
       case 'automations': return <AutomationsView />;
       case 'withdrawals': return <WithdrawalsView />;
       case 'myEarnings': return <MyEarningsView currentUser={user} globalStart={startDate} globalEnd={endDate} />;
-      case 'tasks': return <TasksView currentUser={user} />;
+      case 'tasks': return <TasksView currentUser={user} activeTab={tasksActiveTab} onTabChange={setTasksActiveTab} />;
       default: return <Dashboard startDate={startDate} endDate={endDate} />;
     }
   };
@@ -259,12 +355,23 @@ const App: React.FC = () => {
               <div className="w-8 h-8 bg-[#ff5a1f] rounded-lg flex items-center justify-center font-black text-white shrink-0">T</div>
               {sidebarOpen && <span className="text-xl font-extrabold tracking-tight text-gray-900 truncate uppercase">Taskronize</span>}
             </div>
-            <button 
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg transition-all"
-            >
-              {sidebarOpen ? <ChevronLeft size={18} /> : <Menu size={18} />}
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              {/* BELL_ICON — Haiku replaces this comment with bell button JSX */}
+              <button ref={bellRef} onClick={handleBellClick} className="relative p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                {unreadCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center px-0.5 leading-none">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg transition-all"
+              >
+                {sidebarOpen ? <ChevronLeft size={18} /> : <Menu size={18} />}
+              </button>
+            </div>
           </div>
 
           <nav className="flex-1 px-4 py-2 space-y-1 overflow-y-auto scrollbar-hide">
@@ -386,6 +493,22 @@ const App: React.FC = () => {
           />
         </div>
       </Modal>
+
+      {/* Notification Dropdown */}
+      {showNotifDropdown && (
+        <NotificationDropdown
+          ref={notifDropdownRef}
+          notifications={notifications}
+          unreadCount={unreadCount}
+          position={dropdownPos}
+          currentUser={user}
+          notifAllUsers={notifAllUsers}
+          notifAdminUserId={notifAdminUserId}
+          onAdminUserChange={setNotifAdminUserId}
+          onMarkAllRead={handleMarkAllRead}
+          onNotifClick={handleNotifClick}
+        />
+      )}
 
       {showChangePasswordModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">

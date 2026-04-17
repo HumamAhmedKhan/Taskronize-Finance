@@ -198,3 +198,29 @@ export interface TeamTask {
   created_by: number | null;
   created_at: string;
 }
+
+export interface AppNotification {
+  id: number;
+  user_id: number;
+  type: 'mention' | 'assigned' | 'comment';
+  actor_id: number | null;
+  actor_name: string;
+  message: string;
+  preview: string | null;
+  entity_type: 'team_task' | 'personal_task' | 'project' | null;
+  entity_id: number | null;
+  entity_name: string | null;
+  is_read: boolean;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface TaskComment {
+  id: number;
+  task_type: 'team' | 'personal';
+  task_id: number;
+  user_id: number | null;
+  user_name: string;
+  content: string;
+  created_at: string;
+}

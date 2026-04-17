@@ -1,15 +1,16 @@
 
-import React, { useState } from 'react';
+import React from 'react';
 import { User } from '../types';
 import PersonalTasksView from './PersonalTasksView';
 import TeamTasksView from './TeamTasksView';
 
 interface TasksViewProps {
   currentUser: User;
+  activeTab: 'personal' | 'team';
+  onTabChange: (tab: 'personal' | 'team') => void;
 }
 
-const TasksView: React.FC<TasksViewProps> = ({ currentUser }) => {
-  const [activeTab, setActiveTab] = useState<'personal' | 'team'>('personal');
+const TasksView: React.FC<TasksViewProps> = ({ currentUser, activeTab, onTabChange }) => {
 
   return (
     <div className="space-y-6">
@@ -20,7 +21,7 @@ const TasksView: React.FC<TasksViewProps> = ({ currentUser }) => {
         </div>
         <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit">
           <button
-            onClick={() => setActiveTab('personal')}
+            onClick={() => onTabChange('personal')}
             className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
               activeTab === 'personal'
                 ? 'bg-white text-slate-900 shadow-sm'
@@ -30,7 +31,7 @@ const TasksView: React.FC<TasksViewProps> = ({ currentUser }) => {
             My Tasks
           </button>
           <button
-            onClick={() => setActiveTab('team')}
+            onClick={() => onTabChange('team')}
             className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
               activeTab === 'team'
                 ? 'bg-white text-slate-900 shadow-sm'
