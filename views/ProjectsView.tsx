@@ -438,8 +438,10 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
                     <FolderOpen size={18} />
                   </a>
                 )}
-                <button onClick={() => handleEdit(p)} className="p-2.5 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all"><Edit2 size={18} /></button>
-                {(!currentUser || currentUser.user_type === 'admin') && (
+                {currentUser?.user_type !== 'partner' && (
+                  <button onClick={() => handleEdit(p)} className="p-2.5 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all"><Edit2 size={18} /></button>
+                )}
+                {currentUser?.user_type === 'admin' && (
                   <button onClick={() => handleDeleteProject(p.id)} className="p-2.5 text-gray-300 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"><Trash2 size={18} /></button>
                 )}
               </div>
