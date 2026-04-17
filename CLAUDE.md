@@ -10,6 +10,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - When you discover a workaround or repeated failure, add a one-line bullet (under 15 words) to ## Learnings.
 - Do not push the code changes to the Git until you are asked to push them.
 
+## Global-First Logic Rule
+**All permission checks, visibility rules, and access logic must be data-driven and apply universally — never hardcoded for specific users, names, or IDs.**
+
+- Permission/visibility logic lives in one place (e.g. `getFirstAccessibleTab`, `isTabVisible`, `canAccess` in `App.tsx`) and is reused everywhere — not duplicated per view or per user.
+- No user names, user IDs, or team member names in conditional logic. Use `user_type`, `permissions[key]`, or DB-driven flags only.
+- When fixing a bug for one user, ask: "Does this fix apply to ALL current and future accounts?" If not, make it generic before shipping.
+- New accounts must work correctly out of the box using only the permissions JSON stored in Supabase — no code changes required per new user.
+- Example: a user with no `dashboard` permission must be redirected to their first accessible tab on login AND on page reload AND when their permissions change — not just in one of those paths.
+
 ## Commands
 ```bash
 npm run dev      # Dev server → localhost:3000
@@ -100,3 +109,5 @@ views/
 - Overdue timer cleanup must reset scheduledOverdue ref or timers are never rescheduled.
 - reportData deductions must be subtracted not added; PDF amounts inflate otherwise.
 - Use indexOf('-') not split('-') for keys containing member names (hyphens break it).
+- `undefined !== 'none'` is true; always check for truthy value before comparing to 'none'.
+- Tab redirect on login must also run on page reload (useEffect) — not just in login().

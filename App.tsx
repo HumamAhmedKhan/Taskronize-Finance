@@ -70,15 +70,31 @@ const App: React.FC = () => {
   const [changePwError, setChangePwError] = useState('');
   const [changePwLoading, setChangePwLoading] = useState(false);
 
+  // Derive the first tab a user is allowed to see, used on login and page reload
+  const getFirstAccessibleTab = (userData: User): keyof PagePermissions => {
+    const dashPerm = userData.permissions?.['dashboard'];
+    if (dashPerm && dashPerm !== 'none') return 'dashboard';
+    const allTabs: (keyof PagePermissions)[] = ['revenue', 'projects', 'projectManagement', 'payments', 'expenses', 'incomeStreams', 'team', 'users', 'monthlyClosing', 'backup', 'myEarnings'];
+    const firstTab = allTabs.find(tab => {
+      const level = userData.permissions?.[tab];
+      if (tab === 'myEarnings') return userData.user_type === 'partner' || userData.user_type === 'team_member';
+      if (tab === 'revenue' && userData.user_type === 'partner') return true;
+      return level === 'full' || level === 'edit-hidden';
+    });
+    return firstTab ?? 'dashboard';
+  };
+
   useEffect(() => {
     const saved = localStorage.getItem('taskronize_user');
     if (!saved) return;
     const cached: User = JSON.parse(saved);
     setUser(cached);
+    setActiveTab(getFirstAccessibleTab(cached));
     // Re-fetch from DB so stale cached fields (e.g. linked_income_stream_ids) are always fresh
     supabase.from('users').select('*').eq('id', cached.id).single().then(({ data }) => {
       if (data) {
         setUser(data);
+        setActiveTab(getFirstAccessibleTab(data));
         localStorage.setItem('taskronize_user', JSON.stringify(data));
       }
     });
@@ -87,18 +103,7 @@ const App: React.FC = () => {
   const login = (userData: User) => {
     setUser(userData);
     localStorage.setItem('taskronize_user', JSON.stringify(userData));
-    // If dashboard is not permitted, default to first accessible tab
-    const dashPerm = userData.permissions?.['dashboard'];
-    if (!dashPerm || dashPerm === 'none') {
-      const allTabs: (keyof PagePermissions)[] = ['revenue', 'projects', 'projectManagement', 'payments', 'expenses', 'incomeStreams', 'team', 'users', 'monthlyClosing', 'backup', 'myEarnings'];
-      const firstTab = allTabs.find(tab => {
-        const level = userData.permissions?.[tab];
-        if (tab === 'myEarnings') return userData.user_type === 'partner' || userData.user_type === 'team_member';
-        if (tab === 'revenue' && userData.user_type === 'partner') return true;
-        return level === 'full' || level === 'edit-hidden';
-      });
-      if (firstTab) setActiveTab(firstTab);
-    }
+    setActiveTab(getFirstAccessibleTab(userData));
   };
 
   const logout = () => {
