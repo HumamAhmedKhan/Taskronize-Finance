@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, supabase } from '../lib/supabase';
 import { Project, IncomeStream, TeamMember, ProjectAllocation, User } from '../types';
-import { Search, Filter, Plus, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, AlertCircle, TrendingUp, AlertTriangle, Rocket, MessageSquare, X, Calendar, Link as LinkIcon, Paperclip, AtSign, Send, CheckCircle2, Circle, History, Layers, Check, Edit2, Trash2, List, FolderOpen } from 'lucide-react';
+import { Search, Filter, Plus, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, AlertCircle, TrendingUp, AlertTriangle, Rocket, MessageSquare, X, Calendar, Link as LinkIcon, Paperclip, AtSign, Send, CheckCircle2, Circle, History, Layers, Check, Edit2, Trash2, List, FolderOpen, ArrowUpRight } from 'lucide-react';
 import Modal from '../components/Modal';
 import RichTextEditor, { RichCommentContent } from '../components/RichTextEditor';
 
@@ -46,6 +46,14 @@ interface ProjectManagementViewProps {
   currentUser?: User | null;
 }
 
+interface SubtaskComment {
+  id: string;
+  author_name: string;
+  author_id: number;
+  text: string;
+  created_at: string;
+}
+
 interface Subtask {
   id: string;
   title: string;
@@ -53,6 +61,9 @@ interface Subtask {
   start_date?: string;
   due_date?: string;
   assignee_id?: string;
+  priority?: 'high' | 'medium' | 'low';
+  description?: string;
+  comments?: SubtaskComment[];
 }
 
 interface ChecklistItem {
@@ -152,6 +163,9 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
   const [newTag, setNewTag] = useState('');
   const [newTagColor, setNewTagColor] = useState('');
   const [newSubtask, setNewSubtask] = useState('');
+  const [selectedSubtask, setSelectedSubtask] = useState<{ subtask: Subtask; projectId: number } | null>(null);
+  const [subtaskDraft, setSubtaskDraft] = useState<Subtask | null>(null);
+
   const [newDependency, setNewDependency] = useState('');
   const [newChecklistItem, setNewChecklistItem] = useState('');
   const [showAssigneeDropdown, setShowAssigneeDropdown] = useState(false);
@@ -414,6 +428,40 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
     } catch (e) {
       console.error('Failed to save management data', e);
     }
+  };
+
+  const updateSubtask = (projectId: number, subtaskId: string, changes: Partial<Subtask>) => {
+    const cur = managementData[projectId];
+    if (!cur) return;
+    const updatedSubtasks = cur.subtasks.map((s: Subtask) => s.id === subtaskId ? { ...s, ...changes } : s);
+    const updated = { ...cur, subtasks: updatedSubtasks };
+    setManagementData(prev => ({ ...prev, [projectId]: updated }));
+    saveManagementData(projectId, updated);
+    if (selectedProject?.id === projectId) {
+      setEditData(prev => ({ ...prev, subtasks: updatedSubtasks }));
+    }
+  };
+
+  const handleSubtaskSave = () => {
+    if (!selectedSubtask || !subtaskDraft) return;
+    updateSubtask(selectedSubtask.projectId, subtaskDraft.id, subtaskDraft);
+    setSelectedSubtask(null);
+    setSubtaskDraft(null);
+  };
+
+  const handleSubtaskComment = (html: string) => {
+    if (!selectedSubtask || !subtaskDraft || !html || html === '<p></p>') return;
+    const comment: SubtaskComment = {
+      id: Date.now().toString(),
+      author_name: currentUser?.name || 'Unknown',
+      author_id: typeof currentUser?.id === 'number' ? currentUser.id : 0,
+      text: html,
+      created_at: new Date().toISOString(),
+    };
+    const updatedComments = [...(subtaskDraft.comments || []), comment];
+    const updated = { ...subtaskDraft, comments: updatedComments };
+    setSubtaskDraft(updated);
+    updateSubtask(selectedSubtask.projectId, subtaskDraft.id, { comments: updatedComments });
   };
 
   const saveActivityToDb = async (activity: Activity) => {
@@ -1870,7 +1918,10 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                                   <button onClick={e => { e.stopPropagation(); const cur = managementData[project.id]; if (!cur) return; const upd = cur.subtasks.map((s: any) => s.id === subtask.id ? { ...s, completed: !s.completed } : s); const d = { ...cur, subtasks: upd }; setManagementData(prev => ({ ...prev, [project.id]: d })); saveManagementData(project.id, d); }} className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${subtask.completed ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white hover:border-blue-400'}`}>
                                     {subtask.completed && <Check size={10} className="text-white" />}
                                   </button>
-                                  <span className={`text-xs ${subtask.completed ? 'text-slate-400 line-through' : 'text-slate-700'} truncate`}>{subtask.title}</span>
+                                  <span
+                                    className={`text-xs truncate ${subtask.completed ? 'text-slate-400 line-through' : 'text-slate-600 hover:text-blue-600 cursor-pointer'}`}
+                                    onClick={e => { e.stopPropagation(); setSubtaskDraft({ ...subtask }); setSelectedSubtask({ subtask, projectId: project.id }); }}
+                                  >{subtask.title}</span>
                                 </div>
                               );
                               if (key === 'tags') return <div key="tags" className="flex items-center px-3 text-slate-400 text-xs shrink-0" style={{ width: getColWidth('tags') }}>-</div>;
@@ -2910,9 +2961,16 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                               }}
                               className={`flex-1 bg-transparent border-none focus:ring-0 p-0 text-sm font-medium transition-all ${subtask.completed ? 'text-slate-400 line-through' : 'text-slate-700'}`}
                             />
-                            <button 
+                            <button
+                              onClick={() => { setSubtaskDraft({ ...subtask }); setSelectedSubtask({ subtask, projectId: selectedProject!.id }); }}
+                              className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-blue-500 transition-all"
+                              title="Open details"
+                            >
+                              <ArrowUpRight size={14} />
+                            </button>
+                            <button
                               onClick={() => setEditData({ ...editData, subtasks: editData.subtasks.filter(s => s.id !== subtask.id) })}
-                              className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition-all ml-2"
+                              className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition-all ml-1"
                             >
                               <X size={16} />
                             </button>
@@ -3607,6 +3665,192 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
           )}
         </div>
       </Modal>
+
+      {/* ── Subtask Detail Modal ── */}
+      {selectedSubtask && subtaskDraft && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => { setSelectedSubtask(null); setSubtaskDraft(null); }} />
+
+          <div className="relative bg-white rounded-2xl shadow-2xl flex overflow-hidden border border-slate-100" style={{ width: '90vw', maxWidth: '1200px', height: '90vh' }}>
+
+            {/* Left Panel — Subtask Details */}
+            <div className="overflow-y-auto scrollbar-hide flex-shrink-0 flex flex-col" style={{ width: '55%', padding: '32px' }}>
+
+              {/* Header */}
+              <div style={{ marginBottom: '20px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 500, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: '6px' }}>Subtask</span>
+                <input
+                  type="text"
+                  value={subtaskDraft.title}
+                  onChange={e => setSubtaskDraft(d => d ? { ...d, title: e.target.value } : d)}
+                  style={{ fontSize: '20px', fontWeight: 600, color: '#0f172a', letterSpacing: '-0.01em', margin: '0', lineHeight: 1.3, width: '100%', border: 'none', outline: 'none', background: 'transparent', padding: 0 }}
+                  placeholder="Subtask title..."
+                />
+              </div>
+
+              {/* Status + Priority */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4" style={{ marginBottom: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 500, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '4px' }}>Status</label>
+                  <button
+                    onClick={() => setSubtaskDraft(d => d ? { ...d, completed: !d.completed } : d)}
+                    style={{ height: '38px' }}
+                    className={`w-full flex items-center justify-center gap-2 border rounded-lg text-xs font-semibold uppercase tracking-wider transition-all ${
+                      subtaskDraft.completed
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <CheckCircle2 size={14} />
+                    {subtaskDraft.completed ? 'Completed' : 'Pending'}
+                  </button>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 500, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '4px' }}>Priority</label>
+                  <div className="relative">
+                    <select
+                      value={subtaskDraft.priority || 'medium'}
+                      onChange={e => setSubtaskDraft(d => d ? { ...d, priority: e.target.value as 'high' | 'medium' | 'low' } : d)}
+                      style={{ height: '38px' }}
+                      className="w-full appearance-none bg-white border border-slate-200 rounded-lg pl-10 pr-10 text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all cursor-pointer"
+                    >
+                      <option value="low">Low Priority</option>
+                      <option value="medium">Medium Priority</option>
+                      <option value="high">High Priority</option>
+                    </select>
+                    <div className="absolute left-4 top-1/2 -translate-y-1/2">
+                      <span className="w-2.5 h-2.5 rounded-full block" style={{
+                        backgroundColor: subtaskDraft.priority === 'high' ? '#ef4444' : subtaskDraft.priority === 'medium' ? '#f59e0b' : '#10b981'
+                      }} />
+                    </div>
+                    <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Dates */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4" style={{ marginBottom: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 500, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '4px' }}>Start Date</label>
+                  <input
+                    type="datetime-local"
+                    value={toDatetimeLocal(subtaskDraft.start_date)}
+                    onChange={e => setSubtaskDraft(d => d ? { ...d, start_date: e.target.value } : d)}
+                    style={{ height: '38px' }}
+                    className="w-full appearance-none bg-white border border-slate-200 rounded-lg px-3 text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 500, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '4px' }}>Due Date</label>
+                  <input
+                    type="datetime-local"
+                    value={toDatetimeLocal(subtaskDraft.due_date)}
+                    onChange={e => setSubtaskDraft(d => d ? { ...d, due_date: e.target.value } : d)}
+                    style={{ height: '38px' }}
+                    className="w-full appearance-none bg-white border border-slate-200 rounded-lg px-3 text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
+                  />
+                </div>
+              </div>
+
+              {/* Assignee */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 500, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '4px' }}>Assignee</label>
+                <div className="relative">
+                  <select
+                    value={subtaskDraft.assignee_id || ''}
+                    onChange={e => setSubtaskDraft(d => d ? { ...d, assignee_id: e.target.value || undefined } : d)}
+                    style={{ height: '38px' }}
+                    className="w-full appearance-none bg-white border border-slate-200 rounded-lg pl-10 pr-10 text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all cursor-pointer"
+                  >
+                    <option value="">Unassigned</option>
+                    {teamMembers.map(tm => (
+                      <option key={tm.id} value={tm.id}>{tm.name}</option>
+                    ))}
+                  </select>
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+                    <AtSign size={14} />
+                  </div>
+                  <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Description */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 500, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '4px' }}>Description</label>
+                <textarea
+                  value={subtaskDraft.description || ''}
+                  onChange={e => setSubtaskDraft(d => d ? { ...d, description: e.target.value } : d)}
+                  placeholder="Add a description..."
+                  rows={5}
+                  className="w-full px-4 py-3 border border-slate-200 rounded-lg text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all resize-none outline-none"
+                />
+              </div>
+
+              {/* Save Button */}
+              <div className="pt-3 border-t border-slate-100 mt-auto">
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleSubtaskSave}
+                    className="px-6 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-medium transition-all shadow-xl shadow-slate-900/20 text-sm"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Panel — Activity Feed */}
+            <div className="bg-slate-50 flex flex-col" style={{ width: '45%', minWidth: 0 }}>
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 bg-white shrink-0">
+                <div className="flex items-center gap-2 text-slate-900 font-semibold text-sm">
+                  <History size={15} />
+                  Activity Feed
+                </div>
+                <button
+                  onClick={() => { setSelectedSubtask(null); setSubtaskDraft(null); }}
+                  className="p-1.5 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Scrollable comments list */}
+              <div className="flex-1 overflow-y-auto scrollbar-hide" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '0' }}>
+                {(subtaskDraft.comments || []).length === 0 ? (
+                  <div className="text-center text-slate-400 text-sm py-12">No activity yet. Start the conversation!</div>
+                ) : (
+                  [...(subtaskDraft.comments || [])].map(comment => (
+                    <div key={comment.id} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '14px 0', borderBottom: '1px solid #f1f5f9' }}>
+                      <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#e2e8f0', flexShrink: 0, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 500, color: '#64748b' }}>
+                        {comment.author_name.charAt(0).toUpperCase()}
+                      </div>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '12px', fontWeight: 600, color: '#0f172a' }}>{comment.author_name}</span>
+                          <span style={{ fontSize: '11px', color: '#94a3b8' }}>{formatDisplayDatetime(comment.created_at)}</span>
+                        </div>
+                        <div style={{ background: 'white', border: '1px solid #f1f5f9', borderRadius: '8px', padding: '8px 10px', marginTop: '4px' }}>
+                          <RichCommentContent html={comment.text} />
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Comment input — fixed at bottom */}
+              <div className="shrink-0 p-4 bg-white border-t border-slate-200">
+                <RichTextEditor
+                  teamMembers={teamMembers}
+                  onSubmit={handleSubtaskComment}
+                />
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
     </div>
   );
 };

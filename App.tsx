@@ -20,7 +20,8 @@ import {
   DollarSign,
   Zap,
   Lock,
-  Landmark
+  Landmark,
+  CheckSquare
 } from 'lucide-react';
 import bcrypt from 'bcryptjs';
 import { User, PagePermissions } from './types';
@@ -41,6 +42,7 @@ import ProjectManagementView from './views/ProjectManagementView';
 import MyEarningsView from './views/MyEarningsView';
 import AutomationsView from './views/AutomationsView';
 import WithdrawalsView from './views/WithdrawalsView';
+import TasksView from './views/TasksView';
 import { DateShortcuts } from './components/DateShortcuts';
 import Modal from './components/Modal';
 
@@ -74,11 +76,17 @@ const App: React.FC = () => {
   const getFirstAccessibleTab = (userData: User): keyof PagePermissions => {
     const dashPerm = userData.permissions?.['dashboard'];
     if (dashPerm && dashPerm !== 'none') return 'dashboard';
-    const allTabs: (keyof PagePermissions)[] = ['revenue', 'projects', 'projectManagement', 'payments', 'expenses', 'incomeStreams', 'team', 'users', 'monthlyClosing', 'backup', 'myEarnings'];
+    const allTabs: (keyof PagePermissions)[] = ['tasks', 'revenue', 'projects', 'projectManagement', 'payments', 'expenses', 'incomeStreams', 'team', 'users', 'monthlyClosing', 'backup', 'myEarnings'];
     const firstTab = allTabs.find(tab => {
-      const level = userData.permissions?.[tab];
+      if (tab === 'tasks') {
+        if (userData.user_type === 'partner') return false;
+        if (userData.user_type === 'admin') return true;
+        const level = userData.permissions?.[tab];
+        return !!level && level !== 'none';
+      }
       if (tab === 'myEarnings') return userData.user_type === 'partner' || userData.user_type === 'team_member';
       if (tab === 'revenue' && userData.user_type === 'partner') return true;
+      const level = userData.permissions?.[tab];
       return level === 'full' || level === 'edit-hidden';
     });
     return firstTab ?? 'dashboard';
@@ -164,6 +172,11 @@ const App: React.FC = () => {
     if (page === 'automations') return user.user_type === 'admin';
     if (page === 'withdrawals') return user.user_type === 'admin';
     if (page === 'myEarnings') return user.user_type === 'partner' || user.user_type === 'team_member';
+    if (page === 'tasks') {
+      if (user.user_type === 'partner') return false;
+      if (user.user_type === 'admin') return true;
+      return !!user.permissions['tasks'] && user.permissions['tasks'] !== 'none';
+    }
     if (page === 'revenue' && user.user_type === 'partner') return true;
     let level = user.permissions[page];
     if (level === undefined && page === 'projectManagement') {
@@ -189,6 +202,7 @@ const App: React.FC = () => {
     { id: 'payments', name: 'Payments', icon: CreditCard },
     { id: 'expenses', name: 'Expenses', icon: Receipt },
     { id: 'incomeStreams', name: 'Income Streams', icon: Database },
+    { id: 'tasks', name: 'Tasks', icon: CheckSquare },
     { id: 'team', name: 'Team', icon: Users },
     { id: 'users', name: 'Users', icon: Settings },
     { id: 'monthlyClosing', name: 'Monthly Closing', icon: Calendar },
@@ -215,6 +229,7 @@ const App: React.FC = () => {
       case 'automations': return <AutomationsView />;
       case 'withdrawals': return <WithdrawalsView />;
       case 'myEarnings': return <MyEarningsView currentUser={user} globalStart={startDate} globalEnd={endDate} />;
+      case 'tasks': return <TasksView currentUser={user} />;
       default: return <Dashboard startDate={startDate} endDate={endDate} />;
     }
   };

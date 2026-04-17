@@ -19,6 +19,7 @@ export interface PagePermissions {
   myEarnings: PermissionLevel;
   pmBulkEdit: PermissionLevel;
   pmManageStatuses: PermissionLevel;
+  tasks: PermissionLevel;
 }
 
 export interface User {
@@ -173,4 +174,27 @@ export interface FinancialGoal {
 export interface Tag {
   text: string;
   color: string;
+}
+
+export interface PersonalTask {
+  id: number;
+  user_id: number;
+  title: string;
+  due_date: string | null;
+  completed: boolean;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface TeamTask {
+  id: number;
+  title: string;
+  project_id: number | null;
+  priority: 'high' | 'medium' | 'low';
+  status: 'todo' | 'in_progress' | 'completed';
+  due_date: string | null;
+  completed: boolean;
+  completed_at: string | null;
+  created_by: number | null;
+  created_at: string;
 }

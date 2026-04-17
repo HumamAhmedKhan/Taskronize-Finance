@@ -109,12 +109,12 @@ function createMentionSuggestion(
 
 // ─── Popup position helper ─────────────────────────────────────────────────────
 
-function getPopupStyle(rect: DOMRect | null): React.CSSProperties {
+function getPopupStyle(rect: DOMRect | null, menuWidth = 248): React.CSSProperties {
   if (!rect) return { display: 'none' };
   return {
     position: 'fixed',
-    top:  rect.bottom + 6,
-    left: Math.min(rect.left, window.innerWidth - 248),
+    bottom: window.innerHeight - rect.top + 6,
+    left: Math.min(Math.max(rect.left, 8), window.innerWidth - menuWidth - 8),
     zIndex: 9999,
   };
 }
@@ -402,7 +402,7 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ teamMembers, onSubmit }
 
       {/* ── Slash command popup ── */}
       {slashMenu.open && slashMenu.items.length > 0 && (
-        <div style={{ ...getPopupStyle(slashMenu.rect), background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', width: 240, maxHeight: 320, overflowY: 'auto', padding: '6px 0' }}>
+        <div style={{ ...getPopupStyle(slashMenu.rect, 240), background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', width: 240, maxHeight: 320, overflowY: 'auto', padding: '6px 0' }}>
           {groupedSlash.map(group => (
             <div key={group.group}>
               <div style={{ padding: '4px 12px 2px', fontSize: 10, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{group.group}</div>
@@ -427,7 +427,7 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ teamMembers, onSubmit }
 
       {/* ── Mention popup ── */}
       {mentionMenu.open && mentionMenu.items.length > 0 && (
-        <div style={{ ...getPopupStyle(mentionMenu.rect), background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', width: 220, maxHeight: 260, overflowY: 'auto', padding: '6px 0' }}>
+        <div style={{ ...getPopupStyle(mentionMenu.rect, 220), background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', width: 220, maxHeight: 260, overflowY: 'auto', padding: '6px 0' }}>
           <div style={{ padding: '4px 12px 2px', fontSize: 10, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Team Members</div>
           {mentionMenu.items.map((member, idx) => {
             const active = idx === mentionMenu.selectedIndex;
