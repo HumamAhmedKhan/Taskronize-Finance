@@ -223,14 +223,17 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
   const handleDeleteProject = async (id: number) => {
     if (!confirm('Are you sure you want to delete this project? All allocations and revenue links will also be removed.')) return;
     try {
+      // Guard: block deletion if any allocation is already settled in a payment
+      const { data: allocs } = await supabase.from('project_allocations').select('id').eq('project_id', id);
+      await checkSettledAllocations((allocs || []).map((a: any) => a.id));
       await Promise.all([
         supabase.from('project_allocations').delete().eq('project_id', id),
         supabase.from('project_revenue_links').delete().eq('project_id', id)
       ]);
       await db.delete('projects', id);
       loadData();
-    } catch (err) {
-      alert('Delete failed.');
+    } catch (err: any) {
+      alert(err.message || 'Delete failed.');
     }
   };
 
