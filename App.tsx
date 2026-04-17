@@ -87,6 +87,18 @@ const App: React.FC = () => {
   const login = (userData: User) => {
     setUser(userData);
     localStorage.setItem('taskronize_user', JSON.stringify(userData));
+    // If dashboard is not permitted, default to first accessible tab
+    const dashPerm = userData.permissions?.['dashboard'];
+    if (!dashPerm || dashPerm === 'none') {
+      const allTabs: (keyof PagePermissions)[] = ['revenue', 'projects', 'projectManagement', 'payments', 'expenses', 'incomeStreams', 'team', 'users', 'monthlyClosing', 'backup', 'myEarnings'];
+      const firstTab = allTabs.find(tab => {
+        const level = userData.permissions?.[tab];
+        if (tab === 'myEarnings') return userData.user_type === 'partner' || userData.user_type === 'team_member';
+        if (tab === 'revenue' && userData.user_type === 'partner') return true;
+        return level === 'full' || level === 'edit-hidden';
+      });
+      if (firstTab) setActiveTab(firstTab);
+    }
   };
 
   const logout = () => {
@@ -143,7 +155,7 @@ const App: React.FC = () => {
 
   const isTabVisible = (page: keyof PagePermissions) => {
     if (!user || !user.permissions) return false;
-    if (page === 'dashboard') return user.permissions['dashboard'] !== 'none';
+    if (page === 'dashboard') return !!user.permissions['dashboard'] && user.permissions['dashboard'] !== 'none';
     if (page === 'automations') return user.user_type === 'admin';
     if (page === 'withdrawals') return user.user_type === 'admin';
     if (page === 'myEarnings') return user.user_type === 'partner' || user.user_type === 'team_member';
