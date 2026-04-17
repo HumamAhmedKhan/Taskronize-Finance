@@ -61,3 +61,23 @@ export const parseMentionUsernames = (text: string): string[] => {
   const matches = text.match(/@(\w+)/g) || [];
   return [...new Set(matches.map(m => m.slice(1).toLowerCase()))];
 };
+
+/**
+ * Throws if any of the given allocation IDs are already referenced in a settled payment.
+ * Call this before deleting any project_allocations row.
+ */
+export const checkSettledAllocations = async (allocIds: number[]): Promise<void> => {
+  if (allocIds.length === 0) return;
+  const refs = allocIds.map(id => `ALLOC_${id}`);
+  const { data: settled } = await supabase
+    .from('production_payments')
+    .select('id, recipient_name, paid_revenue_commission_ids')
+    .overlaps('paid_revenue_commission_ids', refs);
+  if (settled && settled.length > 0) {
+    const names = settled.map((p: any) => `Payment #${p.id} (${p.recipient_name})`).join(', ');
+    throw new Error(
+      `Cannot remove settled allocation(s) — already paid in: ${names}. ` +
+      `Update the payment record first, then remove the allocation.`
+    );
+  }
+};

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { db, supabase } from '../lib/supabase';
+import { db, supabase, checkSettledAllocations } from '../lib/supabase';
 import { Project, IncomeStream, TeamMember, ProjectAllocation, User } from '../types';
 import { Search, Filter, Plus, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, AlertCircle, TrendingUp, AlertTriangle, Rocket, MessageSquare, X, Calendar, Link as LinkIcon, Paperclip, AtSign, Send, CheckCircle2, Circle, History, Layers, Check, Edit2, Trash2, List, FolderOpen, ArrowUpRight } from 'lucide-react';
 import Modal from '../components/Modal';
@@ -998,6 +998,13 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
     const existingAlloc = allocations.find(a => a.project_id === selectedProject.id && a.team_member_id === teamMemberId);
     
     if (existingAlloc) {
+      // Guard: block removal if this allocation is already settled in a payment
+      try {
+        await checkSettledAllocations([existingAlloc.id]);
+      } catch (err: any) {
+        alert(err.message);
+        return;
+      }
       // Remove allocation
       await db.delete('project_allocations', existingAlloc.id);
       setAllocations(allocations.filter(a => a.id !== existingAlloc.id));
@@ -1211,6 +1218,13 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
 
         if (bulkEditFields.updateAssignees) {
           const existingAllocs = newAllocations.filter(a => a.project_id === projectId);
+          // Guard: skip this project if any allocation is already settled
+          try {
+            await checkSettledAllocations(existingAllocs.map(a => a.id));
+          } catch (err: any) {
+            console.warn(`Bulk edit skipped project ${projectId}: ${err.message}`);
+            continue;
+          }
           for (const alloc of existingAllocs) {
             await db.delete('project_allocations', alloc.id);
           }

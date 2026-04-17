@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { supabase, db } from '../lib/supabase';
+import { supabase, db, checkSettledAllocations } from '../lib/supabase';
 import { Project, IncomeStream, TeamMember, ProjectAllocation, Revenue } from '../types';
 import SearchableSelect from '../components/SearchableSelect';
 import Table from '../components/Table';
@@ -170,6 +170,8 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         const { data: currentAllocs } = await supabase.from('project_allocations').select('id').eq('project_id', projectId);
         const toDeleteAllocIds = (currentAllocs || []).filter(a => !keptIds.has(a.id)).map(a => a.id);
         if (toDeleteAllocIds.length > 0) {
+          // Guard: block deletion if any allocation is already referenced in a settled payment
+          await checkSettledAllocations(toDeleteAllocIds);
           await supabase.from('project_allocations').delete().in('id', toDeleteAllocIds);
         }
 
