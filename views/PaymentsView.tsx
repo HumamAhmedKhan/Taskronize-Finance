@@ -113,12 +113,7 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
       const unpaidCommissions: any[] = [];
       
       if (member.role === 'Partner') {
-        const filteredRevenues = revenues.filter(r => 
-          (!globalStart || r.date >= globalStart) && 
-          (!globalEnd || r.date <= globalEnd)
-        );
-
-        filteredRevenues.forEach(rev => {
+        revenues.forEach(rev => {
           const stream = incomeStreams.find(s => s.id === rev.income_stream_id);
           if (!stream) return;
           const rule = stream.commission_structure?.find((r: any) => r.name === member.name);
@@ -156,11 +151,6 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
       const unpaidAllocs = allocations
         .filter(a => a.team_member_id === member.id)
         .filter(a => {
-           const proj = projects.find(p => p.id === a.project_id);
-           if (!proj) return false;
-           return (!globalStart || proj.date >= globalStart) && (!globalEnd || proj.date <= globalEnd);
-        })
-        .filter(a => {
           const isPaid = payments.some(p => {
             if (Number(p.recipient_id) !== Number(member.id)) return false;
             const parsedIds = extractPaidIds(p);
@@ -177,7 +167,6 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
 
       const unpaidOthers = otherPayments
         .filter(o => o.recipient_id === member.id && !o.is_paid)
-        .filter(o => (!globalStart || o.date >= globalStart) && (!globalEnd || o.date <= globalEnd))
         .map(o => ({ ...o, category: o.category || 'Other' }));
       
       let cardConnectsDeduction = 0;
@@ -186,15 +175,28 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
       const processedProjects = new Set<number>();
       const processedProdManual = new Set<string>();
 
+      // Periods where connects/production deductions were already charged in prior settlements
+      const chargedPeriods = new Set<string>();
+      payments.forEach(p => {
+        if (Number(p.recipient_id) !== Number(member.id)) return;
+        extractPaidIds(p).forEach(id => {
+          if (id.startsWith('ALLOC_')) return;
+          const dashIdx = id.indexOf('-');
+          if (dashIdx === -1) return;
+          const prevRev = revenues.find(r => String(r.id) === id.slice(0, dashIdx));
+          if (prevRev) chargedPeriods.add(`${prevRev.income_stream_id}-${prevRev.date.substring(0, 7)}`);
+        });
+      });
+
       unpaidCommissions.forEach(c => {
           const rev = revenues.find(r => r.id === c.revId);
           const stream = incomeStreams.find(s => s.name === c.stream);
-          
+
           if (rev && stream) {
              const periodKey = `${rev.income_stream_id}-${rev.date.substring(0, 7)}`;
              const rule = stream.commission_structure?.find((r: any) => r.name === member.name);
 
-             if (rule?.deductConnects && !processedConnects.has(periodKey)) {
+             if (rule?.deductConnects && !processedConnects.has(periodKey) && !chargedPeriods.has(periodKey)) {
                  const ym = rev.date.substring(0, 7);
                  const connectsMonthly = getConnectsMonthly(expenses, Number(rev.income_stream_id), `${ym}-01`, `${ym}-31`);
                  const share = connectsMonthly * (Number(rule.value) / 100);
@@ -222,15 +224,15 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
                      }
                  });
 
-                 if (!processedProdManual.has(periodKey)) {
+                 if (!processedProdManual.has(periodKey) && !chargedPeriods.has(periodKey)) {
                      const manualProdMonthly = expenses
-                      .filter(e => 
-                        (e.is_production || e.category === 'Production Costs') && 
-                        Number(e.income_stream_id) === Number(rev.income_stream_id) && 
+                      .filter(e =>
+                        (e.is_production || e.category === 'Production Costs') &&
+                        Number(e.income_stream_id) === Number(rev.income_stream_id) &&
                         e.date.startsWith(rev.date.substring(0, 7))
                       )
                       .reduce((s, e) => s + Number(e.amount), 0);
-                    
+
                      const share = manualProdMonthly * (Number(rule.value) / 100);
                      if (share > 0) {
                         cardProductionDeduction += share;
@@ -280,17 +282,30 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
     const deductionItems: any[] = [];
     
     const selectedComms = pool.unpaidCommissions.filter((c: any) => selectedRevenueKeys.includes(c.key));
-    
+
+    // Periods where deductions were already charged in prior settlements for this member
+    const chargedPeriods = new Set<string>();
+    payments.forEach(p => {
+      if (Number(p.recipient_id) !== Number(selectedMember.id)) return;
+      extractPaidIds(p).forEach(id => {
+        if (id.startsWith('ALLOC_')) return;
+        const dashIdx = id.indexOf('-');
+        if (dashIdx === -1) return;
+        const prevRev = revenues.find(r => String(r.id) === id.slice(0, dashIdx));
+        if (prevRev) chargedPeriods.add(`${prevRev.income_stream_id}-${prevRev.date.substring(0, 7)}`);
+      });
+    });
+
     selectedComms.forEach((c: any) => {
       revShareGross += c.grossShareValue;
       const rev = revenues.find(r => r.id === c.revId);
       const stream = incomeStreams.find(s => s.name === c.stream);
-      
+
       if (rev && stream) {
         const periodKey = `${rev.income_stream_id}-${rev.date.substring(0, 7)}`;
         const rule = stream.commission_structure?.find((r: any) => r.name === selectedMember.name);
-        
-        if (rule?.deductConnects && !processedConnects.has(periodKey)) {
+
+        if (rule?.deductConnects && !processedConnects.has(periodKey) && !chargedPeriods.has(periodKey)) {
           const ym = rev.date.substring(0, 7);
           const connectsMonthly = getConnectsMonthly(expenses, Number(rev.income_stream_id), `${ym}-01`, `${ym}-31`);
           const share = connectsMonthly * (Number(rule.value) / 100);
@@ -322,15 +337,15 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
             }
           });
 
-          if (!processedProdManual.has(periodKey)) {
+          if (!processedProdManual.has(periodKey) && !chargedPeriods.has(periodKey)) {
              const manualProdMonthly = expenses
-              .filter(e => 
-                (e.is_production || e.category === 'Production Costs') && 
-                Number(e.income_stream_id) === Number(rev.income_stream_id) && 
+              .filter(e =>
+                (e.is_production || e.category === 'Production Costs') &&
+                Number(e.income_stream_id) === Number(rev.income_stream_id) &&
                 e.date.startsWith(rev.date.substring(0, 7))
               )
               .reduce((s, e) => s + Number(e.amount), 0);
-            
+
              const share = manualProdMonthly * (Number(rule.value) / 100);
              if (share > 0) {
                prodTotal += share;
