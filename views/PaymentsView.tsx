@@ -175,11 +175,17 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
       const processedProjects = new Set<number>();
       const processedProdManual = new Set<string>();
 
-      // Periods where connects/production deductions were already charged in prior settlements
+      // Explicit sentinel guard (new settlements) + derived period guard (backward compat for old settlements)
+      const settledConnects = new Set<string>();
+      const settledProdManual = new Set<string>();
+      const settledProdProjects = new Set<number>();
       const chargedPeriods = new Set<string>();
       payments.forEach(p => {
         if (Number(p.recipient_id) !== Number(member.id)) return;
         extractPaidIds(p).forEach(id => {
+          if (id.startsWith('CONNECTS_')) { settledConnects.add(id.slice(9)); return; }
+          if (id.startsWith('PRODMANUAL_')) { settledProdManual.add(id.slice(11)); return; }
+          if (id.startsWith('PRODPROJECT_')) { settledProdProjects.add(Number(id.slice(12))); return; }
           if (id.startsWith('ALLOC_')) return;
           const dashIdx = id.indexOf('-');
           if (dashIdx === -1) return;
@@ -196,7 +202,7 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
              const periodKey = `${rev.income_stream_id}-${rev.date.substring(0, 7)}`;
              const rule = stream.commission_structure?.find((r: any) => r.name === member.name);
 
-             if (rule?.deductConnects && !processedConnects.has(periodKey) && !chargedPeriods.has(periodKey)) {
+             if (rule?.deductConnects && !processedConnects.has(periodKey) && !settledConnects.has(periodKey) && !chargedPeriods.has(periodKey)) {
                  const ym = rev.date.substring(0, 7);
                  const connectsMonthly = getConnectsMonthly(expenses, Number(rev.income_stream_id), `${ym}-01`, `${ym}-31`);
                  const share = connectsMonthly * (Number(rule.value) / 100);
@@ -210,9 +216,9 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
                  const linkedProjectIds = projectRevenueLinks
                     .filter(link => String(link.revenue_id) === String(rev.id))
                     .map(link => Number(link.project_id));
-                 
+
                  linkedProjectIds.forEach(pId => {
-                     if (!processedProjects.has(pId)) {
+                     if (!processedProjects.has(pId) && !settledProdProjects.has(pId)) {
                          const projAllocTotal = allocations
                             .filter(a => a.project_id === pId)
                             .reduce((s, a) => s + Number(a.amount), 0);
@@ -224,7 +230,7 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
                      }
                  });
 
-                 if (!processedProdManual.has(periodKey) && !chargedPeriods.has(periodKey)) {
+                 if (!processedProdManual.has(periodKey) && !settledProdManual.has(periodKey) && !chargedPeriods.has(periodKey)) {
                      const manualProdMonthly = expenses
                       .filter(e =>
                         (e.is_production || e.category === 'Production Costs') &&
@@ -283,11 +289,17 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
     
     const selectedComms = pool.unpaidCommissions.filter((c: any) => selectedRevenueKeys.includes(c.key));
 
-    // Periods where deductions were already charged in prior settlements for this member
+    // Explicit sentinel guard (new settlements) + derived period guard (backward compat for old settlements)
+    const settledConnects = new Set<string>();
+    const settledProdManual = new Set<string>();
+    const settledProdProjects = new Set<number>();
     const chargedPeriods = new Set<string>();
     payments.forEach(p => {
       if (Number(p.recipient_id) !== Number(selectedMember.id)) return;
       extractPaidIds(p).forEach(id => {
+        if (id.startsWith('CONNECTS_')) { settledConnects.add(id.slice(9)); return; }
+        if (id.startsWith('PRODMANUAL_')) { settledProdManual.add(id.slice(11)); return; }
+        if (id.startsWith('PRODPROJECT_')) { settledProdProjects.add(Number(id.slice(12))); return; }
         if (id.startsWith('ALLOC_')) return;
         const dashIdx = id.indexOf('-');
         if (dashIdx === -1) return;
@@ -305,13 +317,13 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
         const periodKey = `${rev.income_stream_id}-${rev.date.substring(0, 7)}`;
         const rule = stream.commission_structure?.find((r: any) => r.name === selectedMember.name);
 
-        if (rule?.deductConnects && !processedConnects.has(periodKey) && !chargedPeriods.has(periodKey)) {
+        if (rule?.deductConnects && !processedConnects.has(periodKey) && !settledConnects.has(periodKey) && !chargedPeriods.has(periodKey)) {
           const ym = rev.date.substring(0, 7);
           const connectsMonthly = getConnectsMonthly(expenses, Number(rev.income_stream_id), `${ym}-01`, `${ym}-31`);
           const share = connectsMonthly * (Number(rule.value) / 100);
           if (share > 0) {
             connectsTotal += share;
-            deductionItems.push({ type: 'Connects', label: `${stream.name} - ${ym}`, amount: share });
+            deductionItems.push({ type: 'Connects', label: `${stream.name} - ${ym}`, amount: share, key: periodKey });
             processedConnects.add(periodKey);
           }
         }
@@ -320,24 +332,24 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
           const linkedProjectIds = projectRevenueLinks
             .filter(link => Number(link.revenue_id) === Number(rev.id))
             .map(link => Number(link.project_id));
-            
+
           linkedProjectIds.forEach(pId => {
-            if (!processedProjects.has(pId)) {
+            if (!processedProjects.has(pId) && !settledProdProjects.has(pId)) {
               const proj = projects.find(p => p.id === pId);
               const projAllocTotal = allocations
                 .filter(a => a.project_id === pId)
                 .reduce((s, a) => s + Number(a.amount), 0);
-              
+
               const share = projAllocTotal * (Number(rule.value) / 100);
               if (share > 0) {
                 prodTotal += share;
-                deductionItems.push({ type: 'Production', label: `Project: ${proj?.project_name || 'Unlinked'}`, amount: share });
+                deductionItems.push({ type: 'Production', label: `Project: ${proj?.project_name || 'Unlinked'}`, amount: share, key: String(pId) });
                 processedProjects.add(pId);
               }
             }
           });
 
-          if (!processedProdManual.has(periodKey) && !chargedPeriods.has(periodKey)) {
+          if (!processedProdManual.has(periodKey) && !settledProdManual.has(periodKey) && !chargedPeriods.has(periodKey)) {
              const manualProdMonthly = expenses
               .filter(e =>
                 (e.is_production || e.category === 'Production Costs') &&
@@ -349,7 +361,7 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
              const share = manualProdMonthly * (Number(rule.value) / 100);
              if (share > 0) {
                prodTotal += share;
-               deductionItems.push({ type: 'Production (Exp)', label: `${stream.name} - ${rev.date.substring(0, 7)}`, amount: share });
+               deductionItems.push({ type: 'Production (Exp)', label: `${stream.name} - ${rev.date.substring(0, 7)}`, amount: share, key: periodKey });
                processedProdManual.add(periodKey);
              }
           }
@@ -385,9 +397,30 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
     const processedConnects = new Set<string>();
     const processedProjects = new Set<number>();
     const processedProdManual = new Set<string>();
-    
+    const deductionItems: { label: string; amount: number }[] = [];
+
+    // Build guard sets from all prior payments to the same recipient (excluding this payment)
+    const priorPayments = payments.filter(p => p.id !== viewingPayment.id && Number(p.recipient_id) === Number(viewingPayment.recipient_id));
+    const rdSettledConnects = new Set<string>();
+    const rdSettledProdManual = new Set<string>();
+    const rdSettledProdProjects = new Set<number>();
+    const rdChargedPeriods = new Set<string>();
+    priorPayments.forEach(p => {
+      extractPaidIds(p).forEach(id => {
+        if (id.startsWith('CONNECTS_')) { rdSettledConnects.add(id.slice(9)); return; }
+        if (id.startsWith('PRODMANUAL_')) { rdSettledProdManual.add(id.slice(11)); return; }
+        if (id.startsWith('PRODPROJECT_')) { rdSettledProdProjects.add(Number(id.slice(12))); return; }
+        if (id.startsWith('ALLOC_')) return;
+        const dashIdx = id.indexOf('-');
+        if (dashIdx === -1) return;
+        const prevRev = revenues.find(r => String(r.id) === id.slice(0, dashIdx));
+        if (prevRev) rdChargedPeriods.add(`${prevRev.income_stream_id}-${prevRev.date.substring(0, 7)}`);
+      });
+    });
+
     if (viewingPayment.paid_revenue_commission_ids) {
       viewingPayment.paid_revenue_commission_ids.forEach(key => {
+        if (key.startsWith('CONNECTS_') || key.startsWith('PRODMANUAL_') || key.startsWith('PRODPROJECT_')) return;
         if (key.startsWith('ALLOC_')) {
           const allocId = Number(key.split('_')[1]);
           const alloc = allocations.find(a => a.id === allocId);
@@ -425,12 +458,13 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
               const periodKey = `${rev.income_stream_id}-${rev.date.substring(0, 7)}`;
               const rule = stream.commission_structure?.find((r: any) => r.name === memberName);
               
-              if (rule?.deductConnects && !processedConnects.has(periodKey)) {
+              if (rule?.deductConnects && !processedConnects.has(periodKey) && !rdSettledConnects.has(periodKey) && !rdChargedPeriods.has(periodKey)) {
                 const ym = rev.date.substring(0, 7);
                 const connectsMonthly = getConnectsMonthly(expenses, Number(rev.income_stream_id), `${ym}-01`, `${ym}-31`);
                 const share = connectsMonthly * (Number(rule.value) / 100);
                 if (share > 0) {
                   connectsTotal += share;
+                  deductionItems.push({ label: `${stream.name} - ${ym} (Connects)`, amount: share });
                   processedConnects.add(periodKey);
                 }
               }
@@ -440,34 +474,37 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
                 const linkedProjectIds = projectRevenueLinks
                   .filter(link => String(link.revenue_id) === String(rev.id))
                   .map(link => Number(link.project_id));
-                  
+
                 linkedProjectIds.forEach(pId => {
-                  if (!processedProjects.has(pId)) {
+                  if (!processedProjects.has(pId) && !rdSettledProdProjects.has(pId)) {
+                    const proj = projects.find(p => p.id === pId);
                     const projAllocTotal = allocations
                       .filter(a => a.project_id === pId)
                       .reduce((s, a) => s + Number(a.amount), 0);
-                    
+
                     const share = projAllocTotal * (Number(rule.value) / 100);
                     if (share > 0) {
                       prodTotal += share;
+                      deductionItems.push({ label: `Project: ${proj?.project_name || 'Unknown'} (Production)`, amount: share });
                       processedProjects.add(pId);
                     }
                   }
                 });
 
                 // Manual Production Costs
-                if (!processedProdManual.has(periodKey)) {
+                if (!processedProdManual.has(periodKey) && !rdSettledProdManual.has(periodKey) && !rdChargedPeriods.has(periodKey)) {
                    const manualProdMonthly = expenses
-                    .filter(e => 
-                      (e.is_production || e.category === 'Production Costs') && 
-                      Number(e.income_stream_id) === Number(rev.income_stream_id) && 
+                    .filter(e =>
+                      (e.is_production || e.category === 'Production Costs') &&
+                      Number(e.income_stream_id) === Number(rev.income_stream_id) &&
                       e.date.startsWith(rev.date.substring(0, 7))
                     )
                     .reduce((s, e) => s + Number(e.amount), 0);
-                  
+
                    const share = manualProdMonthly * (Number(rule.value) / 100);
                    if (share > 0) {
                      prodTotal += share;
+                     deductionItems.push({ label: `${stream.name} - ${rev.date.substring(0, 7)} (Production)`, amount: share });
                      processedProdManual.add(periodKey);
                    }
                 }
@@ -501,6 +538,7 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
       grossCommissions,
       otherAdditions,
       productionDeduction,
+      deductionItems,
       netAmountDue,
       paymentReceived: viewingPayment.total_amount,
       outstandingBalance: netAmountDue - viewingPayment.total_amount,
@@ -518,9 +556,22 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
       const otherToMark = pool?.unpaidOthers.filter((o: any) => selectedOtherIds.includes(o.id)).map((o: any) => o.id) || [];
       const allocToMark = pool?.unpaidAllocs.filter((a: any) => selectedAllocIds.includes(a.id)).map((a: any) => a.id) || [];
 
+      const connectSentinels = auditCalculation.deductionItems
+        .filter((d: any) => d.type === 'Connects' && d.key)
+        .map((d: any) => `CONNECTS_${d.key}`);
+      const prodManualSentinels = auditCalculation.deductionItems
+        .filter((d: any) => d.type === 'Production (Exp)' && d.key)
+        .map((d: any) => `PRODMANUAL_${d.key}`);
+      const prodProjectSentinels = auditCalculation.deductionItems
+        .filter((d: any) => d.type === 'Production' && d.key)
+        .map((d: any) => `PRODPROJECT_${d.key}`);
+
       const combinedPaidIds = [
         ...selectedRevenueKeys,
-        ...allocToMark.map((id: number) => `ALLOC_${id}`)
+        ...allocToMark.map((id: number) => `ALLOC_${id}`),
+        ...connectSentinels,
+        ...prodManualSentinels,
+        ...prodProjectSentinels
       ];
 
       // Embed paid IDs into notes as a reliable text fallback
@@ -633,44 +684,69 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
     doc.text(reportData.recipient || 'N/A', 15, 38);
     doc.text(reportData.date, pageWidth - 60, 38);
 
-    doc.setFillColor(248, 250, 252);
-    doc.roundedRect(15, 50, pageWidth - 30, isDeveloper ? 50 : 70, 5, 5, 'F');
-    
-    doc.setFontSize(10);
-    doc.setTextColor(148, 163, 184);
-    doc.text('EARNINGS SUMMARY', 25, 60);
+    const partnerDeductionLines: { label: string; val: string; color: number[]; bold?: boolean; small?: boolean; headerOnly?: boolean }[] =
+      reportData.deductionItems.length > 0
+        ? [
+            { label: 'DEDUCTED OVERHEADS', val: '', color: [225, 29, 72], headerOnly: true },
+            ...reportData.deductionItems.map(d => ({ label: `  • ${d.label}`, val: `-${formatCurrency(d.amount)}`, color: [225, 29, 72], small: true })),
+            { label: 'Total Deductions:', val: `-${formatCurrency(reportData.productionDeduction)}`, color: [225, 29, 72], bold: true }
+          ]
+        : [{ label: 'Less: Production Deduction:', val: `-${formatCurrency(reportData.productionDeduction)}`, color: [225, 29, 72] }];
 
-    const summaryItems = isDeveloper ? [
-      { label: 'Total Allocations & Additions:', val: `+${formatCurrency(reportData.otherAdditions)}`, color: [79, 70, 229] },
-      { label: 'Net Amount Due:', val: formatCurrency(reportData.netAmountDue), color: [0, 0, 0], bold: true },
-      { label: 'Payment Received:', val: `-${formatCurrency(reportData.paymentReceived)}`, color: [225, 29, 72] },
-      { label: 'Outstanding Balance:', val: formatCurrency(reportData.outstandingBalance), color: [16, 185, 129], bold: true }
-    ] : [
+    const partnerItems = [
       { label: 'Gross Commissions Earned:', val: formatCurrency(reportData.grossCommissions), color: [0, 0, 0] },
       { label: 'Other Additions (Bonus/Adv):', val: `+${formatCurrency(reportData.otherAdditions)}`, color: [79, 70, 229] },
-      { label: 'Less: Production Deduction:', val: `-${formatCurrency(reportData.productionDeduction)}`, color: [225, 29, 72] },
+      ...partnerDeductionLines,
       { label: 'Net Amount Due:', val: formatCurrency(reportData.netAmountDue), color: [0, 0, 0], bold: true },
       { label: 'Payment Received:', val: `-${formatCurrency(reportData.paymentReceived)}`, color: [225, 29, 72] },
       { label: 'Outstanding Balance:', val: formatCurrency(reportData.outstandingBalance), color: [16, 185, 129], bold: true }
     ];
 
+    const devItems = [
+      { label: 'Total Allocations & Additions:', val: `+${formatCurrency(reportData.otherAdditions)}`, color: [79, 70, 229] },
+      { label: 'Net Amount Due:', val: formatCurrency(reportData.netAmountDue), color: [0, 0, 0], bold: true },
+      { label: 'Payment Received:', val: `-${formatCurrency(reportData.paymentReceived)}`, color: [225, 29, 72] },
+      { label: 'Outstanding Balance:', val: formatCurrency(reportData.outstandingBalance), color: [16, 185, 129], bold: true }
+    ];
+
+    const summaryItems = isDeveloper ? devItems : partnerItems;
+    const boxHeight = 20 + summaryItems.length * 8 + 8;
+
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(15, 50, pageWidth - 30, boxHeight, 5, 5, 'F');
+
+    doc.setFontSize(10);
+    doc.setTextColor(148, 163, 184);
+    doc.text('EARNINGS SUMMARY', 25, 60);
+
     let yPos = 70;
-    summaryItems.forEach(item => {
-      doc.setFont('helvetica', item.bold ? 'bold' : 'normal');
-      doc.setTextColor(0);
-      doc.text(item.label, 25, yPos);
-      doc.setTextColor(item.color[0], item.color[1], item.color[2]);
-      doc.text(item.val, pageWidth - 25, yPos, { align: 'right' });
+    summaryItems.forEach((item: any) => {
+      if (item.headerOnly) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8);
+        doc.setTextColor(item.color[0], item.color[1], item.color[2]);
+        doc.text(item.label, 25, yPos);
+        doc.setFontSize(10);
+      } else {
+        doc.setFontSize(item.small ? 9 : 10);
+        doc.setFont('helvetica', item.bold ? 'bold' : 'normal');
+        doc.setTextColor(0);
+        doc.text(item.label, 25, yPos);
+        doc.setTextColor(item.color[0], item.color[1], item.color[2]);
+        doc.text(item.val, pageWidth - 25, yPos, { align: 'right' });
+        doc.setFontSize(10);
+      }
       yPos += 8;
     });
 
     if (!isDeveloper) {
+      const breakdownY = yPos + 10;
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(148, 163, 184);
-      doc.text('REVENUE COMMISSIONS BREAKDOWN', 15, 135);
+      doc.text('REVENUE COMMISSIONS BREAKDOWN', 15, breakdownY);
 
       (doc as any).autoTable({
-        startY: 140,
+        startY: breakdownY + 5,
         head: [['Client / Stream', 'Date', 'Gross Amount']],
         body: reportData.commissions.map(c => [
           `${c.client}\n${c.stream}\n(Project Value: ${formatCurrency(c.totalSale || 0)})`,
@@ -1075,10 +1151,26 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
                     <span className="text-sm font-medium text-indigo-600">Other Additions (Bonus/Adv):</span>
                     <span className="text-sm font-black text-indigo-600">+{formatCurrency(reportData.otherAdditions)}</span>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium text-rose-500 italic">Less: Production Deduction:</span>
-                    <span className="text-sm font-black text-rose-500">-{formatCurrency(reportData.productionDeduction)}</span>
-                  </div>
+                  {reportData.deductionItems.length > 0 ? (
+                    <div className="space-y-1.5 py-1">
+                      <p className="text-[10px] font-black text-rose-400 uppercase tracking-widest">Deducted Overheads</p>
+                      {reportData.deductionItems.map((d, i) => (
+                        <div key={i} className="flex justify-between items-center text-xs pl-2">
+                          <span className="text-rose-500 italic">• {d.label}</span>
+                          <span className="font-black text-rose-500">-{formatCurrency(d.amount)}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between items-center text-sm pt-1.5 border-t border-rose-100">
+                        <span className="font-medium text-rose-500">Total Deductions:</span>
+                        <span className="font-black text-rose-500">-{formatCurrency(reportData.productionDeduction)}</span>
+                      </div>
+                    </div>
+                  ) : reportData.productionDeduction > 0 ? (
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium text-rose-500 italic">Less: Production Deduction:</span>
+                      <span className="text-sm font-black text-rose-500">-{formatCurrency(reportData.productionDeduction)}</span>
+                    </div>
+                  ) : null}
                   <div className="pt-4 border-t border-slate-200 flex justify-between items-center">
                     <span className="text-base font-black text-slate-900">Net Amount Due:</span>
                     <span className="text-base font-black text-slate-900">{formatCurrency(reportData.netAmountDue)}</span>
