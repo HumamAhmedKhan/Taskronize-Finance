@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase, db } from '../lib/supabase';
-import { IncomeStream, Revenue, ProductionPayment } from '../types';
+import { IncomeStream, Revenue, ProductionPayment, LocalBankExpense, RecurringExpense } from '../types';
 import {
   Plus, Trash2, Eye, X, Landmark, ArrowRight, DollarSign,
   Building2, AlertCircle, ChevronDown, Check, Loader2
@@ -51,13 +51,21 @@ const fmt = (n: number, decimals = 2) =>
 const fmtPKR = (n: number) =>
   n.toLocaleString('en-PK', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
-function extractSettlementIds(ids: (number | SettlementItem)[]): number[] {
-  return ids.map(s => (typeof s === 'number' ? s : s.id));
+function normalizeIds(raw: any): (number | SettlementItem)[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try { const p = JSON.parse(raw); return Array.isArray(p) ? p : []; } catch { return []; }
+  }
+  return [];
 }
-function extractSettlementItems(ids: (number | SettlementItem)[]): SettlementItem[] {
-  return ids.filter((s): s is SettlementItem => typeof s !== 'number');
+function extractSettlementIds(ids: any): number[] {
+  return normalizeIds(ids).map(s => (typeof s === 'number' ? s : s.id));
 }
-function totalPkrOut(ids: (number | SettlementItem)[]): number {
+function extractSettlementItems(ids: any): SettlementItem[] {
+  return normalizeIds(ids).filter((s): s is SettlementItem => typeof s !== 'number');
+}
+function totalPkrOut(ids: any): number {
   return extractSettlementItems(ids).reduce((sum, s) => sum + s.pkr_amount, 0);
 }
 
@@ -111,6 +119,18 @@ const WithdrawalsView: React.FC = () => {
   const [detailWithdrawal, setDetailWithdrawal] = useState<Withdrawal | null>(null);
   const [cancelLoading, setCancelLoading] = useState(false);
 
+  // Local bank expenses
+  const [localBankExpenses, setLocalBankExpenses] = useState<LocalBankExpense[]>([]);
+  const [recurringPlans, setRecurringPlans] = useState<RecurringExpense[]>([]);
+  const [lbeForm, setLbeForm] = useState({
+    source: 'manual' as 'recurring' | 'manual',
+    recurring_expense_id: '',
+    description: '',
+    pkr_amount: '',
+    bank_id: '',
+  });
+  const [lbeLoading, setLbeLoading] = useState(false);
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -139,6 +159,17 @@ const WithdrawalsView: React.FC = () => {
       setWithdrawals(withdrawalsData || []);
     } catch (err) {
       console.error('Error loading withdrawals (table may not exist):', err);
+    }
+
+    try {
+      const [lbeData, recPlansData] = await Promise.all([
+        supabase.from('local_bank_expenses').select('*').order('date', { ascending: false }),
+        supabase.from('recurring_expenses').select('*').eq('is_active', true),
+      ]);
+      setLocalBankExpenses(lbeData.data || []);
+      setRecurringPlans(recPlansData.data || []);
+    } catch (err) {
+      console.error('Error loading local bank expenses:', err);
     }
 
     setLoading(false);
@@ -420,6 +451,75 @@ const WithdrawalsView: React.FC = () => {
     }
   };
 
+  const handleSourceChange = (src: 'recurring' | 'manual') => {
+    setLbeForm({ source: src, recurring_expense_id: '', description: '', pkr_amount: '', bank_id: lbeForm.bank_id });
+  };
+
+  const handleRecurringSelect = (recId: string) => {
+    const plan = recurringPlans.find(r => r.id === parseInt(recId));
+    setLbeForm(f => ({
+      ...f,
+      recurring_expense_id: recId,
+      description: plan ? plan.name : f.description,
+      pkr_amount: plan ? String(Math.round(plan.amount * 275)) : f.pkr_amount,
+    }));
+  };
+
+  const handleRecordLocalExpense = async () => {
+    const bankId = parseInt(lbeForm.bank_id);
+    const pkrAmount = parseFloat(lbeForm.pkr_amount);
+    if (!bankId || !pkrAmount || pkrAmount <= 0 || !lbeForm.description.trim()) {
+      alert('Please fill all required fields.');
+      return;
+    }
+    const bank = banks.find(b => b.id === bankId);
+    if (!bank) { alert('Bank not found.'); return; }
+    setLbeLoading(true);
+    try {
+      const { error: insertErr } = await supabase.from('local_bank_expenses').insert({
+        bank_id: bankId,
+        source: lbeForm.source,
+        recurring_expense_id: lbeForm.source === 'recurring' && lbeForm.recurring_expense_id
+          ? parseInt(lbeForm.recurring_expense_id)
+          : null,
+        description: lbeForm.description,
+        pkr_amount: pkrAmount,
+        date: new Date().toISOString().split('T')[0],
+      });
+      if (insertErr) throw insertErr;
+
+      const { error: bankErr } = await supabase
+        .from('banks')
+        .update({ balance: bank.balance - pkrAmount })
+        .eq('id', bankId);
+      if (bankErr) throw bankErr;
+
+      if (lbeForm.source === 'recurring' && lbeForm.recurring_expense_id) {
+        const { error: recErr } = await supabase
+          .from('recurring_expenses')
+          .update({ paid_at: new Date().toISOString() })
+          .eq('id', parseInt(lbeForm.recurring_expense_id));
+        if (recErr) throw recErr;
+      }
+
+      setLbeForm({ source: 'manual', recurring_expense_id: '', description: '', pkr_amount: '', bank_id: '' });
+      await loadData();
+    } catch (err: any) {
+      alert(`Error: ${err?.message || JSON.stringify(err)}`);
+    } finally {
+      setLbeLoading(false);
+    }
+  };
+
+  const isMarkedPaidThisMonth = (lbe: LocalBankExpense): boolean => {
+    if (lbe.source !== 'recurring' || !lbe.recurring_expense_id) return false;
+    const plan = recurringPlans.find(r => r.id === lbe.recurring_expense_id);
+    if (!plan?.paid_at) return false;
+    const paidAt = new Date(plan.paid_at);
+    const now = new Date();
+    return paidAt.getMonth() === now.getMonth() && paidAt.getFullYear() === now.getFullYear();
+  };
+
   const getFromLabel = (w: Withdrawal) => {
     if (w.from_type === 'platform') {
       const s = incomeStreams.find(s => s.id === parseInt(w.from_id));
@@ -605,6 +705,170 @@ const WithdrawalsView: React.FC = () => {
               <p className="text-sm">No local bank accounts added yet.</p>
               <p className="text-xs mt-1">Click <span className="font-semibold">Add Bank</span> to get started.</p>
             </div>
+          )}
+        </div>
+      </section>
+
+      {/* Divider */}
+      <div className="border-t border-dashed border-slate-200" />
+
+      {/* Local Bank Expenses */}
+      <section>
+        <h3 className="text-sm font-semibold text-slate-500 mb-3">Local Bank Expenses</h3>
+
+        {/* Form bar */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 mb-4">
+          {/* Row 1: Source toggle */}
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={() => handleSourceChange('recurring')}
+              className={`rounded-xl py-2 px-4 text-sm font-bold transition-colors ${
+                lbeForm.source === 'recurring'
+                  ? 'bg-slate-900 text-white'
+                  : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Recurring
+            </button>
+            <button
+              onClick={() => handleSourceChange('manual')}
+              className={`rounded-xl py-2 px-4 text-sm font-bold transition-colors ${
+                lbeForm.source === 'manual'
+                  ? 'bg-slate-900 text-white'
+                  : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Manual
+            </button>
+          </div>
+
+          {/* Row 2: Fields */}
+          <div className="flex flex-wrap gap-3">
+            {lbeForm.source === 'recurring' ? (
+              <>
+                <select
+                  value={lbeForm.recurring_expense_id}
+                  onChange={e => handleRecurringSelect(e.target.value)}
+                  className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                >
+                  <option value="">Select subscription...</option>
+                  {recurringPlans.map(plan => (
+                    <option key={plan.id} value={String(plan.id)}>
+                      {plan.name} — ${plan.amount}/month
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  value={lbeForm.pkr_amount}
+                  readOnly
+                  className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  placeholder="PKR amount"
+                />
+              </>
+            ) : (
+              <input
+                type="number"
+                value={lbeForm.pkr_amount}
+                onChange={e => setLbeForm(f => ({ ...f, pkr_amount: e.target.value }))}
+                className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                placeholder="PKR amount"
+              />
+            )}
+            <input
+              type="text"
+              placeholder="Note..."
+              value={lbeForm.description}
+              onChange={e => setLbeForm(f => ({ ...f, description: e.target.value }))}
+              className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+            />
+            <select
+              value={lbeForm.bank_id}
+              onChange={e => setLbeForm(f => ({ ...f, bank_id: e.target.value }))}
+              className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+            >
+              <option value="">Select bank...</option>
+              {localBanks.map(bank => (
+                <option key={bank.id} value={String(bank.id)}>
+                  {bank.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={handleRecordLocalExpense}
+              disabled={lbeLoading}
+              className="bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-800 transition-all disabled:opacity-60 flex items-center gap-2"
+            >
+              {lbeLoading ? <Loader2 size={16} className="animate-spin" /> : null}
+              Record & Deduct
+            </button>
+          </div>
+        </div>
+
+        {/* Log table */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          {localBankExpenses.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+              <p className="text-sm">No local bank expenses recorded yet.</p>
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-slate-50/60 border-b border-slate-100">
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">Date</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">Description</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">Type</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-400">PKR Amount</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-400">USD Equiv</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">Bank</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {localBankExpenses.map((lbe, idx) => (
+                  <tr
+                    key={lbe.id}
+                    className={`border-b border-slate-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}
+                  >
+                    <td className="px-4 py-3 text-xs text-slate-500">{lbe.date}</td>
+                    <td className="px-4 py-3 font-medium text-slate-800">{lbe.description}</td>
+                    <td className="px-4 py-3">
+                      {lbe.source === 'recurring' ? (
+                        <span className="px-2 py-0.5 bg-violet-100 text-violet-700 rounded text-[10px] font-bold uppercase">
+                          Recurring
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px] font-bold uppercase">
+                          Manual
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right font-bold text-red-500">
+                      −PKR {fmtPKR(lbe.pkr_amount)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-slate-500 text-sm">
+                      ${fmt(lbe.usd_equivalent)}
+                    </td>
+                    <td className="px-4 py-3 text-slate-800">
+                      {banks.find(b => b.id === lbe.bank_id)?.name ?? '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      {isMarkedPaidThisMonth(lbe) ? (
+                        <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-[10px] font-bold">
+                          ✓ Marked paid
+                        </span>
+                      ) : lbe.source === 'recurring' ? (
+                        <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">
+                          Paid (prior)
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 text-xs">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       </section>
@@ -1055,7 +1319,7 @@ const WithdrawalsView: React.FC = () => {
               </div>
 
               {/* Settlements */}
-              {detailWithdrawal.settlement_ids?.length > 0 && (() => {
+              {normalizeIds(detailWithdrawal.settlement_ids).length > 0 && (() => {
                 const items = extractSettlementItems(detailWithdrawal.settlement_ids);
                 const plainIds = extractSettlementIds(detailWithdrawal.settlement_ids);
                 const pkrOut = totalPkrOut(detailWithdrawal.settlement_ids);

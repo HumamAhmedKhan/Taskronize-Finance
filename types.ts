@@ -117,6 +117,19 @@ export interface RecurringExpense {
   day_of_month: number;
   is_active: boolean;
   created_at: string;
+  paid_at?: string | null;
+}
+
+export interface LocalBankExpense {
+  id: number;
+  bank_id: number;
+  source: 'recurring' | 'manual';
+  recurring_expense_id: number | null;
+  description: string;
+  pkr_amount: number;
+  usd_equivalent: number;
+  date: string;
+  created_at: string;
 }
 
 export interface ProductionPayment {

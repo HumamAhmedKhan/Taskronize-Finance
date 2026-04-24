@@ -172,12 +172,21 @@ const ExpensesView: React.FC<ExpensesViewProps> = ({ globalStart, globalEnd }) =
           <div className="bg-gray-900 rounded-[32px] p-8 text-white shadow-xl">
             <div className="flex items-center gap-3 mb-6 text-indigo-400"><Repeat size={20} /><h3 className="font-black text-xs uppercase tracking-widest">Monthly Subscriptions</h3></div>
             <div className="space-y-5">
-              {recurring.map(r => (
-                <div key={r.id} className="flex justify-between items-center group">
-                  <div><p className="text-sm font-black">{r.name}</p><p className="text-[9px] text-gray-400 font-bold uppercase">Day {r.day_of_month} • {r.category}</p></div>
-                  <div className="flex items-center gap-4"><span className="text-sm font-black text-rose-400">{formatCurrency(r.amount)}</span><button onClick={() => { setRecData(r); setShowRecModal(true); }} className="opacity-0 group-hover:opacity-100 transition-all p-1.5 hover:bg-white/10 rounded-lg"><Edit2 size={12} /></button></div>
-                </div>
-              ))}
+              {recurring.map(r => {
+                const now = new Date();
+                const paidAt = r.paid_at ? new Date(r.paid_at) : null;
+                const isPaidThisMonth = paidAt !== null && paidAt.getMonth() === now.getMonth() && paidAt.getFullYear() === now.getFullYear();
+                return (
+                  <div key={r.id} className="flex justify-between items-center group">
+                    <div><p className="text-sm font-black">{r.name}</p><p className="text-[9px] text-gray-400 font-bold uppercase">Day {r.day_of_month} • {r.category}</p></div>
+                    <div className="flex items-center gap-4">
+                      {isPaidThisMonth && <span className="px-2 py-0.5 bg-green-500/20 text-green-400 rounded text-[9px] font-bold uppercase">Paid</span>}
+                      <span className="text-sm font-black text-rose-400">{formatCurrency(r.amount)}</span>
+                      <button onClick={() => { setRecData(r); setShowRecModal(true); }} className="opacity-0 group-hover:opacity-100 transition-all p-1.5 hover:bg-white/10 rounded-lg"><Edit2 size={12} /></button>
+                    </div>
+                  </div>
+                );
+              })}
               <div className="pt-5 border-t border-white/10 flex justify-between items-center"><span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Fixed Monthly Burn</span><span className="text-lg font-black text-rose-400">{formatCurrency(recurring.reduce((s, r) => s + r.amount, 0))}</span></div>
             </div>
           </div>

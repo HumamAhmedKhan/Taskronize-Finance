@@ -64,6 +64,7 @@ interface StreamCardData {
   yhFinalPot?: number;
   partnerSettlement: PartnerSettlementRow[];
   ownerTake: number;
+  streamRevs: Revenue[];
 }
 
 // ── Core Computation ──────────────────────────────────────────────────────────
@@ -112,9 +113,15 @@ function computeStreamCard(
       if (rev) projectStreamMap.set(pid, Number(rev.income_stream_id));
     }
   }
-  const productionAllocs = allocations.filter(
-    a => projectStreamMap.get(a.project_id) === stream.id
-  );
+  const productionAllocs = allocations.filter(a => {
+    if (projectStreamMap.get(a.project_id) !== stream.id) return false;
+    const allocKey = `ALLOC_${a.id}`;
+    return allPayments.some(p => {
+      if (p.date < mStart || p.date > mEnd) return false;
+      const paidIds = extractPaidIds(p);
+      return paidIds.includes(allocKey) || p.notes?.includes(`Alloc: ${a.id}`);
+    });
+  });
   const productionExpenses = expenses.filter(e =>
     (e.is_production || e.category === 'Production Costs') &&
     Number(e.income_stream_id) === stream.id &&
@@ -129,15 +136,24 @@ function computeStreamCard(
     (c: any) => c.calculationBase === 'remaining'
   );
 
-  // Connects breakdown: each rule with deductConnects:true contributes (value% of connects)
-  const connectsBreakdown: ConnectsBreakdownEntry[] = (stream.commission_structure || [])
+  // Connects breakdown: sequential — 'remaining'-based entries take from what's left after 'net'-based ones.
+  const sortedCommStructure = [...(stream.commission_structure || [])].sort(
+    (a: any, b: any) => (a.order ?? 0) - (b.order ?? 0)
+  );
+  const connectsBreakdownResult = sortedCommStructure
     .filter((r: any) => r.deductConnects && r.type === 'percentage')
-    .map((r: any) => ({
-      name: r.name,
-      percent: Number(r.value),
-      share: connects * Number(r.value) / 100,
-    }));
-  const connectsOwnerShare = connects - connectsBreakdown.reduce((s, e) => s + e.share, 0);
+    .reduce(
+      (acc: { breakdown: ConnectsBreakdownEntry[]; pool: number }, r: any) => {
+        const base = r.calculationBase === 'remaining' ? acc.pool : connects;
+        const share = base * Number(r.value) / 100;
+        acc.breakdown.push({ name: r.name, percent: Number(r.value), share });
+        acc.pool -= share;
+        return acc;
+      },
+      { breakdown: [] as ConnectsBreakdownEntry[], pool: connects }
+    );
+  const connectsBreakdown = connectsBreakdownResult.breakdown;
+  const connectsOwnerShare = connectsBreakdownResult.pool;
 
   // Production breakdown: each rule with deductProduction:true contributes (value% of production)
   const productionRecipientShare = (stream.commission_structure || [])
@@ -280,7 +296,8 @@ function computeStreamCard(
     connects, connectsOwnerShare, connectsBreakdown,
     productionTotal, productionOwnerShare, productionByMember,
     yhRemaining, yhFinalPot,
-    partnerSettlement, ownerTake
+    partnerSettlement, ownerTake,
+    streamRevs
   };
 }
 
@@ -288,6 +305,47 @@ function computeStreamCard(
 
 const fmt = (v: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(v);
+
+const GrossRevenueDropdown: React.FC<{
+  streamRevs: Revenue[];
+  gross: number;
+}> = ({ streamRevs, gross }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-t border-slate-50">
+      <div className="flex items-center justify-between py-2">
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 transition-colors"
+        >
+          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          <span>Gross Revenue</span>
+        </button>
+        <span className="font-bold text-slate-800">{fmt(gross)}</span>
+      </div>
+      {open && (
+        <div className="ml-4 pb-3 space-y-1">
+          {streamRevs.length === 0 ? (
+            <p className="text-xs text-slate-400 italic py-1">No revenues this month.</p>
+          ) : (
+            streamRevs.map(rev => (
+              <div key={rev.id} className="flex items-center justify-between py-1 border-t border-slate-50">
+                <div className="flex flex-col">
+                  <span className="text-xs font-medium text-slate-700">{rev.client_name}</span>
+                  {rev.project_description && (
+                    <span className="text-[10px] text-slate-400">{rev.project_description}</span>
+                  )}
+                  <span className="text-[10px] text-slate-400">{rev.date}</span>
+                </div>
+                <span className="text-xs font-semibold text-slate-700">{fmt(Number(rev.total_sale))}</span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const ProductionDropdown: React.FC<{
   productionByMember: ProductionMemberRow[];
@@ -395,7 +453,7 @@ const StreamCard: React.FC<{ data: StreamCardData }> = ({ data }) => {
     connects, connectsOwnerShare, connectsBreakdown,
     productionTotal, productionByMember, productionOwnerShare,
     yhRemaining, yhFinalPot,
-    partnerSettlement, ownerTake
+    partnerSettlement, ownerTake, streamRevs
   } = data;
 
   const netComms = commissionLines.filter(c => c.base === 'net');
@@ -455,11 +513,8 @@ const StreamCard: React.FC<{ data: StreamCardData }> = ({ data }) => {
       {/* Waterfall */}
       <div className="px-6 py-4 divide-y divide-slate-50">
 
-        {/* Gross */}
-        <div className="flex justify-between items-center py-2">
-          <span className="text-sm text-slate-500">Gross Revenue</span>
-          <span className="font-bold text-slate-800">{fmt(gross)}</span>
-        </div>
+        {/* Gross — expandable revenue list */}
+        <GrossRevenueDropdown streamRevs={streamRevs} gross={gross} />
 
         {/* Platform fee */}
         {platformFees > 0 && (

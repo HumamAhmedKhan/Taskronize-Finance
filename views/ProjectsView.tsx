@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase, db, checkSettledAllocations } from '../lib/supabase';
 import { Project, IncomeStream, TeamMember, ProjectAllocation, Revenue } from '../types';
+import { extractPaidIds } from '../utils/calculations';
 import SearchableSelect from '../components/SearchableSelect';
 import Table from '../components/Table';
 import Modal from '../components/Modal';
@@ -16,6 +17,7 @@ import {
   Layers,
   X as CloseIcon,
   MinusCircle,
+  Lock,
   FileText,
   AlertCircle,
   PieChart,
@@ -144,10 +146,13 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         projectId = formData.id;
 
         // ALLOCATIONS — insert new + update existing FIRST, then delete removed
-        // This ensures we never lose data if a write fails mid-way.
         const validAllocs = formAllocations.filter(a => a.team_member_id && a.team_member_id > 0 && a.amount && a.amount > 0);
         const allocsToUpdate = validAllocs.filter(a => a.id);
         const allocsToInsert = validAllocs.filter(a => !a.id);
+
+        // keptIds = ALL form allocs with IDs (including amount=0 assignees from PM view)
+        // Declared here so we can add newly inserted IDs before the delete step
+        const keptIds = new Set<number>(formAllocations.filter(a => a.id).map(a => a.id as number));
 
         for (const alloc of allocsToUpdate) {
           const { error } = await supabase.from('project_allocations').update({
@@ -159,24 +164,25 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         }
 
         if (allocsToInsert.length > 0) {
-          const { error } = await supabase.from('project_allocations').insert(
+          const { data: inserted, error } = await supabase.from('project_allocations').insert(
             allocsToInsert.map(a => ({ project_id: projectId, team_member_id: a.team_member_id, amount: a.amount, role: a.role || 'Production' }))
-          );
+          ).select('id');
           if (error) throw error;
+          // Add new IDs so the delete step below doesn't remove them
+          (inserted || []).forEach((a: any) => keptIds.add(a.id));
         }
 
-        // Only delete allocations removed from the form — after inserts succeed
-        const keptIds = new Set(allocsToUpdate.map(a => a.id));
+        // Only delete allocations explicitly removed from the form
         const { data: currentAllocs } = await supabase.from('project_allocations').select('id').eq('project_id', projectId);
         const toDeleteAllocIds = (currentAllocs || []).filter(a => !keptIds.has(a.id)).map(a => a.id);
         if (toDeleteAllocIds.length > 0) {
-          // Guard: block deletion if any allocation is already referenced in a settled payment
           await checkSettledAllocations(toDeleteAllocIds);
           await supabase.from('project_allocations').delete().in('id', toDeleteAllocIds);
         }
 
-        // REVENUE LINKS — insert new FIRST, then delete removed
-        const existingRevIds = new Set(allLinks.filter(l => l.project_id === projectId).map(l => l.revenue_id));
+        // REVENUE LINKS — re-fetch fresh from DB to avoid stale allLinks state
+        const { data: freshLinks } = await supabase.from('project_revenue_links').select('revenue_id').eq('project_id', projectId);
+        const existingRevIds = new Set((freshLinks || []).map((l: any) => l.revenue_id));
         const newRevIds = formLinks.filter(rid => !existingRevIds.has(rid));
         const removedRevIds = [...existingRevIds].filter(rid => !formLinks.includes(rid));
 
@@ -274,6 +280,19 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
     if (error) throw error;
     await loadData();
   };
+
+  const settledAllocIds = useMemo((): Set<number> => {
+    const ids = new Set<number>();
+    payments.forEach(p => {
+      extractPaidIds(p).forEach(id => {
+        if (typeof id === 'string' && id.startsWith('ALLOC_')) {
+          const num = parseInt(id.slice(6));
+          if (!isNaN(num)) ids.add(num);
+        }
+      });
+    });
+    return ids;
+  }, [payments]);
 
   const pipelineStats = useMemo(() => {
     const totalValue = projects.reduce((sum, p) => sum + Number(p.project_value || 0), 0);
@@ -572,29 +591,48 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
                 </button>
               </div>
               <div className="space-y-3">
-                {formAllocations.map((alloc, idx) => (
-                  <div key={idx} className="flex items-center gap-3 animate-in slide-in-from-left-2">
+                {formAllocations.map((alloc, idx) => {
+                  const isSettled = !!(alloc.id && settledAllocIds.has(alloc.id));
+                  return (
+                  <div key={idx} className="space-y-1">
+                  {isSettled && (
+                    <p className="text-[10px] font-bold text-amber-600 flex items-center gap-1 px-1">
+                      <AlertCircle size={11} /> Already settled — to adjust, use a Deduction on the Payments page.
+                    </p>
+                  )}
+                  <div className="flex items-center gap-3 animate-in slide-in-from-left-2">
                     <div className="flex-1">
-                      <SearchableSelect 
-                        options={teamMembers.map(m => ({ value: m.id, label: m.name }))} 
-                        value={alloc.team_member_id} 
+                      <SearchableSelect
+                        options={teamMembers.map(m => ({ value: m.id, label: m.name }))}
+                        value={alloc.team_member_id}
                         onChange={val => {
+                          if (isSettled) return;
                           const newAllocs = [...formAllocations];
                           newAllocs[idx] = { ...newAllocs[idx], team_member_id: val };
                           setFormAllocations(newAllocs);
-                        }} 
+                        }}
+                        disabled={isSettled}
                       />
                     </div>
                     <div className="w-24">
-                      <input type="number" placeholder="Amt" value={alloc.amount || ''} onChange={e => {
+                      <input type="number" placeholder="Amt" value={alloc.amount || ''} readOnly={isSettled} onChange={e => {
+                        if (isSettled) return;
                         const newAllocs = [...formAllocations];
                         newAllocs[idx] = { ...newAllocs[idx], amount: parseFloat(e.target.value) };
                         setFormAllocations(newAllocs);
-                      }} className="w-full px-4 py-2 bg-slate-50 border border-slate-100 rounded-lg text-xs font-black outline-none" />
+                      }} className={`w-full px-4 py-2 rounded-lg text-xs font-black outline-none ${isSettled ? 'bg-green-50 border border-green-100 text-green-700 cursor-not-allowed' : 'bg-slate-50 border border-slate-100'}`} />
                     </div>
-                    <button onClick={() => setFormAllocations(formAllocations.filter((_, i) => i !== idx))} className="text-rose-300 hover:text-rose-500 transition-colors"><MinusCircle size={20} /></button>
+                    {isSettled ? (
+                      <div className="flex items-center gap-1 text-[10px] font-bold text-green-600 whitespace-nowrap">
+                        <Lock size={13} /> Settled
+                      </div>
+                    ) : (
+                      <button onClick={() => setFormAllocations(formAllocations.filter((_, i) => i !== idx))} className="text-rose-300 hover:text-rose-500 transition-colors"><MinusCircle size={20} /></button>
+                    )}
                   </div>
-                ))}
+                  </div>
+                  );
+                })}
                 {formAllocations.length === 0 && <p className="text-center text-xs text-slate-300 italic">No allocations recorded.</p>}
               </div>
             </div>

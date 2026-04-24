@@ -95,34 +95,36 @@ export function calculateRevenueDetails(
   const totalProdMonthly = prodManualMonthly + projectAllocationCosts;
 
   let remaining = netAfterPlatform;
+  let adjustedNetBase = netAfterPlatform; // reduced by pool-level overhead_deduction entries
   const sortedStructure = [...(stream.commission_structure || [])].sort((a,b) => (a.order || 0) - (b.order || 0));
-  
+
   sortedStructure.forEach(comm => {
+    // Pool-level overhead deduction: reduces remaining (and adjustedNetBase for connects) before percentages
+    if (comm.type === 'overhead_deduction') {
+      const amount = comm.source === 'connects' ? connectsMonthly : totalProdMonthly;
+      if (comm.source === 'connects') adjustedNetBase = Math.max(0, adjustedNetBase - amount);
+      remaining = Math.max(0, remaining - amount);
+      return;
+    }
+
     let base = 0;
     if (comm.calculationBase === 'gross') base = totalSale;
-    else if (comm.calculationBase === 'net') base = netAfterPlatform;
+    else if (comm.calculationBase === 'net') base = adjustedNetBase; // uses pool-adjusted net
     else base = remaining;
 
     // Store gross commission (before any deductions) for reference
     const grossComm = comm.type === 'percentage' ? (base * Number(comm.value) / 100) : Number(comm.value);
     grossCommissions[comm.name] = grossComm;
 
-    // Apply connects/production deductions to the BASE before computing the commission percentage.
-    // This matches the correct formula: commission = rate% × (base − connects − production)
-    let effectiveBase = base;
+    // Gross commissions are sequential percentages — connects/production are deducted
+    // separately at settlement time (via deductConnects/deductProduction flags in PaymentsView).
     const cDed = (comm.deductConnects && connectsMonthly > 0 && comm.type === 'percentage')
       ? connectsMonthly * Number(comm.value) / 100 : 0;
     const pDed = (comm.deductProduction && totalProdMonthly > 0 && comm.type === 'percentage')
       ? totalProdMonthly * Number(comm.value) / 100 : 0;
-    if (comm.deductConnects && connectsMonthly > 0 && comm.type === 'percentage') {
-      effectiveBase = Math.max(0, effectiveBase - connectsMonthly);
-    }
-    if (comm.deductProduction && totalProdMonthly > 0 && comm.type === 'percentage') {
-      effectiveBase = Math.max(0, effectiveBase - totalProdMonthly);
-    }
 
     const final = comm.type === 'percentage'
-      ? effectiveBase * Number(comm.value) / 100
+      ? base * Number(comm.value) / 100
       : grossComm;
     commissions[comm.name] = final;
     deductionsApplied[comm.name] = { connects: cDed, production: pDed };
