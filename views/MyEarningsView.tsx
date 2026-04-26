@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { db, supabase } from '../lib/supabase';
-import { Project, ProjectAllocation, IncomeStream, Revenue, TeamMember, User, Expense } from '../types';
+import { Project, ProjectAllocation, IncomeStream, Revenue, TeamMember, User, Expense, ProductionPayment, OtherPayment } from '../types';
 import { extractPaidIds } from '../utils/calculations';
-import { DollarSign, Clock, CheckCircle2, Receipt } from 'lucide-react';
+import { DollarSign, Clock, CheckCircle2, Receipt, Eye } from 'lucide-react';
 import Table from '../components/Table';
+import SettlementDetailModal from '../components/SettlementDetailModal';
 
 interface MyEarningsViewProps {
   currentUser: User;
@@ -15,22 +16,25 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<Project[]>([]);
   const [allocations, setAllocations] = useState<ProjectAllocation[]>([]);
-  const [payments, setPayments] = useState<any[]>([]);
+  const [payments, setPayments] = useState<ProductionPayment[]>([]);
+  const [otherPayments, setOtherPayments] = useState<OtherPayment[]>([]);
   const [incomeStreams, setIncomeStreams] = useState<IncomeStream[]>([]);
   const [revenues, setRevenues] = useState<Revenue[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [projectRevenueLinks, setProjectRevenueLinks] = useState<any[]>([]);
   const [teamMember, setTeamMember] = useState<TeamMember | null>(null);
   const [timeframe, setTimeframe] = useState<'month' | 'all'>('month');
+  const [viewingPayment, setViewingPayment] = useState<ProductionPayment | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       try {
-        const [projData, allocData, payData, streamData, revData, teamData, expData, prlData] = await Promise.all([
+        const [projData, allocData, payData, otherPayData, streamData, revData, teamData, expData, prlData] = await Promise.all([
           db.get<Project>('projects'),
           db.get<ProjectAllocation>('project_allocations'),
-          db.get<any>('production_payments'),
+          db.get<ProductionPayment>('production_payments'),
+          db.get<OtherPayment>('other_payments'),
           db.get<IncomeStream>('income_streams'),
           db.get<Revenue>('revenues'),
           db.get<TeamMember>('team_members'),
@@ -41,6 +45,7 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
         setProjects(projData || []);
         setAllocations(allocData || []);
         setPayments(payData || []);
+        setOtherPayments(otherPayData || []);
         setIncomeStreams(streamData || []);
         setRevenues(revData || []);
         setExpenses(expData || []);
@@ -150,6 +155,57 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
             ]}
           />
         </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-slate-200 flex items-center gap-3">
+            <Receipt size={18} className="text-slate-400" />
+            <h3 className="text-lg font-bold text-slate-900">Payment History</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Date</th>
+                  <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Amount Paid</th>
+                  <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Note</th>
+                  <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Details</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {myPayments.length === 0 ? (
+                  <tr><td colSpan={4} className="p-8 text-center text-slate-500">No payments recorded yet.</td></tr>
+                ) : myPayments.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((p: any) => (
+                  <tr key={p.id} className="hover:bg-slate-50 transition-colors group cursor-pointer" onClick={() => setViewingPayment(p)}>
+                    <td className="p-4 text-sm text-slate-500 whitespace-nowrap">{new Date(p.date).toLocaleDateString()}</td>
+                    <td className="p-4 font-bold text-emerald-600">{formatCurrency(Number(p.total_amount || 0))}</td>
+                    <td className="p-4 text-sm text-slate-600">{p.notes ? p.notes.replace(/\s*PaidIDs:\[.*?\]/, '').trim() : '—'}</td>
+                    <td className="p-4 text-center">
+                      <button className="p-2 text-indigo-300 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all opacity-0 group-hover:opacity-100">
+                        <Eye size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {viewingPayment && (
+          <SettlementDetailModal
+            isOpen={!!viewingPayment}
+            onClose={() => setViewingPayment(null)}
+            payment={viewingPayment}
+            revenues={revenues}
+            incomeStreams={incomeStreams}
+            expenses={expenses}
+            otherPayments={otherPayments}
+            payments={payments}
+            projects={projects}
+            allocations={allocations}
+            projectRevenueLinks={projectRevenueLinks}
+          />
+        )}
       </div>
     );
   }
@@ -281,8 +337,13 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
       };
     }).filter(Boolean).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    // Pending balance = gross - production - connects deduction - amount already paid
-    const pendingBalance = Math.max(0, totalGross - totalProductionDeduction - totalConnectsDeduction - totalPaid);
+    // Actual cash paid to partner in the selected period
+    const actualTotalPaid = partnerPayments
+      .filter((p: any) => timeframe === 'all' || (p.date >= globalStart && p.date <= globalEnd))
+      .reduce((s: number, p: any) => s + Number(p.total_amount || 0), 0);
+
+    // Pending balance = net commission (after connects) - actual cash paid
+    const pendingBalance = Math.max(0, totalGross - totalProductionDeduction - totalConnectsDeduction - actualTotalPaid);
 
     return (
       <div className="space-y-6 max-w-7xl mx-auto w-full font-manrope">
@@ -328,11 +389,11 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
           </div>
           <div className="bg-slate-900 p-5 rounded-2xl shadow-sm">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Net Commission</h3>
-            <div className="text-xl font-black text-white">{formatCurrency(Math.max(0, totalGross - totalProductionDeduction))}</div>
+            <div className="text-xl font-black text-white">{formatCurrency(Math.max(0, totalGross - totalProductionDeduction - totalConnectsDeduction))}</div>
           </div>
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Total Paid</h3>
-            <div className="text-xl font-black text-emerald-600">{formatCurrency(totalPaid)}</div>
+            <div className="text-xl font-black text-emerald-600">{formatCurrency(actualTotalPaid)}</div>
           </div>
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm border-l-4 border-l-amber-400">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Pending Balance</h3>
@@ -422,27 +483,49 @@ const MyEarningsView: React.FC<MyEarningsViewProps> = ({ currentUser, globalStar
                   <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Amount Paid</th>
                   <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Note</th>
                   <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Recorded By</th>
+                  <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Details</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {partnerPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="p-8 text-center text-slate-500">No payments recorded yet.</td>
+                    <td colSpan={5} className="p-8 text-center text-slate-500">No payments recorded yet.</td>
                   </tr>
                 ) : partnerPayments.map((p: any) => (
-                  <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                  <tr key={p.id} className="hover:bg-slate-50 transition-colors group cursor-pointer" onClick={() => setViewingPayment(p)}>
                     <td className="p-4 text-sm text-slate-500 whitespace-nowrap">
                       {new Date(p.date).toLocaleDateString()}
                     </td>
                     <td className="p-4 font-bold text-emerald-600">{formatCurrency(Number(p.total_amount || 0))}</td>
                     <td className="p-4 text-sm text-slate-600">{p.notes ? p.notes.replace(/\s*PaidIDs:\[.*?\]/, '').trim() : '—'}</td>
                     <td className="p-4 text-sm text-slate-500">{p.recorded_by || p.admin_name || '—'}</td>
+                    <td className="p-4 text-center">
+                      <button className="p-2 text-indigo-300 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all opacity-0 group-hover:opacity-100">
+                        <Eye size={16} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         </div>
+
+        {viewingPayment && (
+          <SettlementDetailModal
+            isOpen={!!viewingPayment}
+            onClose={() => setViewingPayment(null)}
+            payment={viewingPayment}
+            revenues={revenues}
+            incomeStreams={incomeStreams}
+            expenses={expenses}
+            otherPayments={otherPayments}
+            payments={payments}
+            projects={projects}
+            allocations={allocations}
+            projectRevenueLinks={projectRevenueLinks}
+          />
+        )}
       </div>
     );
   }

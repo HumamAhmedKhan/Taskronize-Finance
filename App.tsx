@@ -46,6 +46,7 @@ import TasksView from './views/TasksView';
 import NotificationDropdown from './components/NotificationDropdown';
 import { DateShortcuts } from './components/DateShortcuts';
 import Modal from './components/Modal';
+import OverdueTicker from './components/OverdueTicker';
 
 interface AuthContextType {
   user: User | null;
@@ -92,7 +93,6 @@ const App: React.FC = () => {
     const allTabs: (keyof PagePermissions)[] = ['tasks', 'revenue', 'projects', 'projectManagement', 'payments', 'expenses', 'incomeStreams', 'team', 'users', 'monthlyClosing', 'backup', 'myEarnings'];
     const firstTab = allTabs.find(tab => {
       if (tab === 'tasks') {
-        if (userData.user_type === 'partner') return false;
         if (userData.user_type === 'admin') return true;
         const level = userData.permissions?.[tab];
         return !!level && level !== 'none';
@@ -269,7 +269,6 @@ const App: React.FC = () => {
     if (page === 'withdrawals') return user.user_type === 'admin';
     if (page === 'myEarnings') return user.user_type === 'partner' || user.user_type === 'team_member';
     if (page === 'tasks') {
-      if (user.user_type === 'partner') return false;
       if (user.user_type === 'admin') return true;
       return !!user.permissions['tasks'] && user.permissions['tasks'] !== 'none';
     }
@@ -463,6 +462,7 @@ const App: React.FC = () => {
 
         {/* Main Content Area */}
         <main className="flex-1 flex flex-col min-w-0 bg-white md:m-3 md:ml-0 md:rounded-[32px] md:border md:border-gray-200 overflow-hidden shadow-sm relative">
+          <OverdueTicker currentUser={user} />
           <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth pb-24 md:pb-8">
             <div className="max-w-[1400px] mx-auto">
               {renderContent()}

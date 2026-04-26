@@ -227,13 +227,14 @@ const WithdrawalsView: React.FC = () => {
   const pkrSummary = useMemo(() => {
     if (wForm.from_type !== 'bank' || wForm.settlement_ids.length === 0) return null;
     const rate = parseFloat(wForm.exchange_rate) || 0;
+    const effectiveRate = rate > 0 ? rate : 275;
     let pkrToPartners = 0;
     let pkrToTeam = 0;
     wForm.settlement_ids.forEach(id => {
       const p = payments.find(pm => pm.id === id);
       if (!p) return;
       const isPartner = p.payment_type === 'partner';
-      const pkrRate = isPartner ? rate : 275;
+      const pkrRate = isPartner ? effectiveRate : 275;
       if (isPartner) pkrToPartners += p.total_amount * pkrRate;
       else pkrToTeam += p.total_amount * pkrRate;
     });

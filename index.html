@@ -73,6 +73,13 @@
         background-color: #f3f4f6;
         color: #111827 !important;
       }
+      @keyframes ticker-scroll {
+        0%   { transform: translateX(0); }
+        100% { transform: translateX(-50%); }
+      }
+      .animate-ticker {
+        animation: ticker-scroll 22s linear infinite;
+      }
       @media print {
         .no-print { display: none !important; }
       }

@@ -5,6 +5,7 @@ import { TeamMember, Project, ProjectAllocation, Revenue, IncomeStream, Producti
 import { calculateRevenueDetails, extractPaidIds, getConnectsMonthly } from '../utils/calculations';
 import SearchableSelect from '../components/SearchableSelect';
 import Modal from '../components/Modal';
+import SettlementDetailModal from '../components/SettlementDetailModal';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 import { 
@@ -1103,163 +1104,20 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
         </Modal>
       )}
 
-      {showReportModal && reportData && (
-        <Modal title="Reconciliation Audit Statement" isOpen={showReportModal} onClose={() => setShowReportModal(false)} showSaveButton={false} maxWidth="max-w-3xl">
-          <div className="space-y-8 animate-in slide-in-from-bottom-2 duration-300">
-            <div className="flex justify-between items-start">
-              <div className="space-y-1">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{reportData.paymentType === 'developer' ? 'Developer/Designer' : 'Partner'}</p>
-                <h3 className="text-xl font-black text-slate-900">{reportData.recipient}</h3>
-              </div>
-              <div className="text-right space-y-1">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Settlement Date</p>
-                <h3 className="text-xl font-black text-slate-900">{reportData.date}</h3>
-              </div>
-            </div>
-
-            <div className="bg-slate-50 rounded-[32px] p-8 border border-slate-100">
-              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">Earnings Summary</h4>
-              {reportData.paymentType === 'developer' ? (
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium text-indigo-600">Total Allocations & Additions:</span>
-                    <span className="text-sm font-black text-indigo-600">+{formatCurrency(reportData.otherAdditions)}</span>
-                  </div>
-                  <div className="pt-4 border-t border-slate-200 flex justify-between items-center">
-                    <span className="text-base font-black text-slate-900">Net Amount Due:</span>
-                    <span className="text-base font-black text-slate-900">{formatCurrency(reportData.netAmountDue)}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-black text-rose-600">Payment Received:</span>
-                    <span className="text-sm font-black text-rose-600">-{formatCurrency(reportData.paymentReceived)}</span>
-                  </div>
-                  <div className="pt-6 border-t border-dashed border-slate-200 flex justify-between items-center">
-                    <span className="text-xl font-black text-slate-900">Outstanding Balance:</span>
-                    <div className="text-right">
-                      <span className="text-2xl font-black text-emerald-500 tracking-tighter">{formatCurrency(reportData.outstandingBalance)}</span>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">Fully Settled</p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium text-slate-600">Gross Commissions Earned:</span>
-                    <span className="text-sm font-black text-slate-900">{formatCurrency(reportData.grossCommissions)}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium text-indigo-600">Other Additions (Bonus/Adv):</span>
-                    <span className="text-sm font-black text-indigo-600">+{formatCurrency(reportData.otherAdditions)}</span>
-                  </div>
-                  {reportData.deductionItems.length > 0 ? (
-                    <div className="space-y-1.5 py-1">
-                      <p className="text-[10px] font-black text-rose-400 uppercase tracking-widest">Deducted Overheads</p>
-                      {reportData.deductionItems.map((d, i) => (
-                        <div key={i} className="flex justify-between items-center text-xs pl-2">
-                          <span className="text-rose-500 italic">• {d.label}</span>
-                          <span className="font-black text-rose-500">-{formatCurrency(d.amount)}</span>
-                        </div>
-                      ))}
-                      <div className="flex justify-between items-center text-sm pt-1.5 border-t border-rose-100">
-                        <span className="font-medium text-rose-500">Total Deductions:</span>
-                        <span className="font-black text-rose-500">-{formatCurrency(reportData.productionDeduction)}</span>
-                      </div>
-                    </div>
-                  ) : reportData.productionDeduction > 0 ? (
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium text-rose-500 italic">Less: Production Deduction:</span>
-                      <span className="text-sm font-black text-rose-500">-{formatCurrency(reportData.productionDeduction)}</span>
-                    </div>
-                  ) : null}
-                  <div className="pt-4 border-t border-slate-200 flex justify-between items-center">
-                    <span className="text-base font-black text-slate-900">Net Amount Due:</span>
-                    <span className="text-base font-black text-slate-900">{formatCurrency(reportData.netAmountDue)}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-black text-rose-600">Payment Received:</span>
-                    <span className="text-sm font-black text-rose-600">-{formatCurrency(reportData.paymentReceived)}</span>
-                  </div>
-                  <div className="pt-6 border-t border-dashed border-slate-200 flex justify-between items-center">
-                    <span className="text-xl font-black text-slate-900">Outstanding Balance:</span>
-                    <div className="text-right">
-                      <span className="text-2xl font-black text-emerald-500 tracking-tighter">{formatCurrency(reportData.outstandingBalance)}</span>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">Fully Settled</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {reportData.paymentType !== 'developer' && (
-              <div className="space-y-4">
-                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                  <FileText size={14} className="text-slate-300" /> Revenue Commissions Breakdown
-                </h4>
-                <div className="border border-slate-100 rounded-3xl overflow-hidden">
-                  <table className="w-full text-left">
-                    <thead className="bg-slate-50 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
-                      <tr><th className="px-6 py-4">Client / Stream</th><th className="px-6 py-4 text-right">Gross Share</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {reportData.commissions.map((c, i) => (
-                        <tr key={i} className="hover:bg-slate-50/30">
-                          <td className="px-6 py-4">
-                            <div className="flex flex-col">
-                              <span className="text-sm font-black text-slate-900">{c.client}</span>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase">{c.stream} • {c.date}</span>
-                                <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[9px] font-bold">Proj: {formatCurrency(c.totalSale || 0)}</span>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-right font-black text-slate-900 text-sm">{formatCurrency(c.amount)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {reportData.others.length > 0 && (
-              <div className="space-y-4">
-                <h4 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2">
-                  <Plus size={14} className="text-indigo-300" /> Other Payments Settled (Bonuses/Advances)
-                </h4>
-                <div className="space-y-3">
-                  {reportData.others.map((o, i) => (
-                    <div key={i} className="flex justify-between items-center p-6 bg-indigo-50/30 rounded-3xl border border-indigo-50">
-                      <div>
-                        <span className="text-sm font-black text-indigo-900 block">{o.description}</span>
-                        <span className="text-[10px] font-bold text-indigo-400 uppercase">{o.date} • {o.category}</span>
-                      </div>
-                      <span className="text-base font-black text-indigo-600">+{formatCurrency(o.amount)}</span>
-                    </div>
-                  ))}
-                  <div className="p-4 flex justify-between items-center border-t border-indigo-100">
-                    <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Total Other Additions</span>
-                    <span className="text-lg font-black text-indigo-600">{formatCurrency(reportData.otherAdditions)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="pt-6 flex gap-4 no-print">
-              <button 
-                onClick={generatePDF}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-200 transition-all flex items-center justify-center gap-3 active:scale-95"
-              >
-                <Download size={18} /> Export PDF
-              </button>
-              <button 
-                onClick={() => setShowReportModal(false)}
-                className="px-8 bg-slate-100 hover:bg-slate-200 text-slate-600 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </Modal>
+      {showReportModal && viewingPayment && (
+        <SettlementDetailModal
+          isOpen={showReportModal}
+          onClose={() => setShowReportModal(false)}
+          payment={viewingPayment}
+          revenues={revenues}
+          incomeStreams={incomeStreams}
+          expenses={expenses}
+          otherPayments={otherPayments}
+          payments={payments}
+          projects={projects}
+          allocations={allocations}
+          projectRevenueLinks={projectRevenueLinks}
+        />
       )}
 
       {/* ... (Other Modals and Layout remain same) ... */}

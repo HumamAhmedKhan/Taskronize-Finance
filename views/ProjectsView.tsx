@@ -394,7 +394,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
               return <span className="text-xs font-bold text-gray-500">{stream ? stream.name : '-'}</span>;
             }},
             { header: 'PROJECT VALUE', render: (p) => <span className="font-black text-gray-900">{formatCurrency(p.project_value)}</span> },
-            ...(currentUser.user_type !== 'partner' ? [
+            ...(true ? [
               { 
                 header: 'ASSIGNED PRODUCTION', 
                 render: (p: Project) => {
