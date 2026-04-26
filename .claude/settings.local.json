@@ -31,7 +31,12 @@
       "Bash(grep:*)",
       "Bash(ls -la /Users/humamahmedkhan/taskronize2/views/WithdrawalsView.*)",
       "Bash(claude mcp:*)",
-      "Bash(python3 -m json.tool)"
+      "Bash(python3 -m json.tool)",
+      "Bash(open *)",
+      "Bash(xargs kill *)",
+      "Bash(lsof -ti:3000)",
+      "Bash(npm run *)",
+      "Bash(echo \"PID: $!\")"
     ]
   },
   "enableAllProjectMcpServers": true,

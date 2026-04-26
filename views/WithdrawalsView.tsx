@@ -885,8 +885,9 @@ const WithdrawalsView: React.FC = () => {
               <p className="text-xs mt-1">Process a withdrawal to see it here.</p>
             </div>
           ) : (
+            <div className="overflow-y-auto max-h-[420px]">
             <table className="w-full text-sm">
-              <thead>
+              <thead className="sticky top-0 z-10">
                 <tr className="border-b border-slate-100 bg-slate-50/60">
                   <th className="px-5 py-3.5 text-left text-xs font-semibold text-slate-400">Date</th>
                   <th className="px-5 py-3.5 text-left text-xs font-semibold text-slate-400">From</th>
@@ -925,6 +926,7 @@ const WithdrawalsView: React.FC = () => {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </section>

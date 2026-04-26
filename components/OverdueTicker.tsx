@@ -14,13 +14,10 @@ const OverdueTicker: React.FC<Props> = ({ currentUser }) => {
     const today = new Date().toISOString().split('T')[0];
 
     const fetchOverdue = async () => {
-      // Fetch all personal tasks (same as PersonalTasksView — filter client-side)
-      const { data: personalData, error: personalErr } = await supabase
+      const { data: personalData } = await supabase
         .from('personal_tasks')
         .select('title, completed, due_date')
         .eq('user_id', currentUser.id);
-
-      if (personalErr) console.error('[OverdueTicker] personal_tasks error:', personalErr);
 
       const personal = (personalData || [])
         .filter((t: any) => !t.completed && t.due_date && t.due_date < today)
@@ -28,12 +25,10 @@ const OverdueTicker: React.FC<Props> = ({ currentUser }) => {
 
       let team: string[] = [];
       if (currentUser.team_member_id) {
-        const { data: teamData, error: teamErr } = await supabase
+        const { data: teamData } = await supabase
           .from('team_task_assignees')
           .select('team_tasks(title, due_date, completed, status)')
           .eq('team_member_id', currentUser.team_member_id);
-
-        if (teamErr) console.error('[OverdueTicker] team_task_assignees error:', teamErr);
 
         team = (teamData || [])
           .map((r: any) => r.team_tasks)
@@ -48,12 +43,27 @@ const OverdueTicker: React.FC<Props> = ({ currentUser }) => {
           .map((t: any) => t.title as string);
       }
 
-      const all = [...personal, ...team];
-      console.log('[OverdueTicker] overdue tasks:', all, 'today:', today);
-      setTitles(all);
+      setTitles([...personal, ...team]);
     };
 
     fetchOverdue();
+
+    // Re-evaluate whenever a personal task changes (e.g. marked complete)
+    const channel = supabase
+      .channel('overdue-ticker')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'personal_tasks', filter: `user_id=eq.${currentUser.id}` },
+        () => fetchOverdue()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'team_tasks' },
+        () => fetchOverdue()
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [currentUser.id, currentUser.team_member_id]);
 
   if (titles.length === 0) return null;
