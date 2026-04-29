@@ -154,7 +154,8 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ teamMembers, onSubmit }
   );
   const [bubble, setBubble] = useState<BubbleState>({ visible: false, top: 0, left: 0 });
   const [headingOpen, setHeadingOpen] = useState(false);
-  const [editorState, setEditorState] = useState(0); // tick to re-render on editor update
+  const [editorState, setEditorState] = useState(0);
+  const [isFocused, setIsFocused] = useState(false);
 
   const slashHandlersRef   = useRef<any>({});
   const mentionHandlersRef = useRef<any>({});
@@ -266,7 +267,7 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ teamMembers, onSubmit }
       <style>{`
         .tiptap-editor {
           outline: none;
-          min-height: 80px;
+          min-height: 100%;
           padding: 10px 14px;
           font-size: 13px;
           color: #374151;
@@ -376,10 +377,19 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ teamMembers, onSubmit }
 
       {/* ── Editor box ── */}
       <div
-        style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'visible', background: 'white' }}
+        style={{ border: `1px solid ${isFocused ? '#94a3b8' : '#e2e8f0'}`, borderRadius: 12, overflow: 'hidden', background: 'white', transition: 'border-color 0.15s' }}
         onKeyDown={handleKeyDown}
+        onFocus={() => setIsFocused(true)}
+        onBlur={() => setIsFocused(false)}
       >
-        <EditorContent editor={editor} />
+        <div style={{
+          minHeight: isFocused || (editor && !editor.isEmpty) ? '80px' : '44px',
+          maxHeight: '200px',
+          overflowY: 'auto',
+          transition: 'min-height 0.15s ease',
+        }}>
+          <EditorContent editor={editor} />
+        </div>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', background: '#f8fafc', borderTop: '1px solid #f1f5f9', borderRadius: '0 0 12px 12px' }}>
           <div style={{ display: 'flex', gap: 4 }}>

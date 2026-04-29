@@ -1929,7 +1929,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                             {effectiveColOrder.map(key => {
                               if (key === 'name') return (
                                 <div key="name" className="flex items-center pl-10 pr-4 gap-2 shrink-0" style={{ width: getColWidth('name') }}>
-                                  <button onClick={e => { e.stopPropagation(); const cur = managementData[project.id]; if (!cur) return; const upd = cur.subtasks.map((s: any) => s.id === subtask.id ? { ...s, completed: !s.completed } : s); const d = { ...cur, subtasks: upd }; setManagementData(prev => ({ ...prev, [project.id]: d })); saveManagementData(project.id, d); }} className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${subtask.completed ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white hover:border-blue-400'}`}>
+                                  <button onClick={e => { e.stopPropagation(); const cur = managementData[project.id]; if (!cur) return; const nowDone = !subtask.completed; const upd = cur.subtasks.map((s: any) => s.id === subtask.id ? { ...s, completed: nowDone, due_date: nowDone ? null : s.due_date } : s); const d = { ...cur, subtasks: upd }; setManagementData(prev => ({ ...prev, [project.id]: d })); saveManagementData(project.id, d); }} className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${subtask.completed ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white hover:border-blue-400'}`}>
                                     {subtask.completed && <Check size={10} className="text-white" />}
                                   </button>
                                   <span
@@ -2959,7 +2959,8 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
                           <div className="flex items-center gap-3">
                             <button 
                               onClick={() => {
-                                const updated = editData.subtasks.map(s => s.id === subtask.id ? { ...s, completed: !s.completed } : s);
+                                const nowDone = !subtask.completed;
+                                const updated = editData.subtasks.map(s => s.id === subtask.id ? { ...s, completed: nowDone, due_date: nowDone ? null : s.due_date } : s);
                                 setEditData({ ...editData, subtasks: updated });
                               }}
                               className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 transition-colors ${subtask.completed ? 'bg-slate-900 text-white' : 'bg-slate-100 text-transparent hover:bg-slate-200 border border-slate-300'}`}
