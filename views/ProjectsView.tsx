@@ -717,7 +717,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
                         .reduce((sum, pr) => sum + Number(pr.amount || 0), 0);
 
                       const allocated = Number(alloc.amount || 0);
-                      const fullyPaid = allocated > 0 && paidAmount >= allocated;
+                      const fullyPaid = allocated > 0 && (paidAmount >= allocated || !!(alloc.id && settledAllocIds.has(alloc.id as number)));
 
                       return (
                         <div key={idx} className={`grid grid-cols-3 px-4 py-3 items-center bg-white ${idx < visibleAllocs.length - 1 ? 'border-b border-slate-50' : ''}`}>
