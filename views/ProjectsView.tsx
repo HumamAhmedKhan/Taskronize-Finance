@@ -32,6 +32,7 @@ interface ProjectsViewProps {
 
 const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, currentUser }) => {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [mobileFilter, setMobileFilter] = useState<'all' | 'awaiting' | 'paid'>('all');
   const [streams, setStreams] = useState<IncomeStream[]>([]);
   const [revenues, setRevenues] = useState<Revenue[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
@@ -334,49 +335,161 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
     }, 0);
   }, [formLinks, revenues]);
 
+  // Mobile: how much of each project's value is covered by linked revenue (same rule as the desktop STATUS column)
+  const projectCollection = (p: Project) => {
+    const linkedRevIds = allLinks.filter(l => l.project_id === p.id).map(l => l.revenue_id);
+    const linkedVal = revenues.filter(r => linkedRevIds.includes(r.id)).reduce((sum, r) => sum + Number(r.total_sale), 0);
+    const percent = p.project_value > 0 ? Math.min(100, (linkedVal / p.project_value) * 100) : 0;
+    const isFull = linkedVal >= p.project_value * 0.99;
+    return { linkedVal, percent, isFull };
+  };
+  const canCreateProject = !currentUser || currentUser.user_type === 'admin' || currentUser.user_type === 'partner';
+  const mobileProjects = projects
+    .filter(p => p.project_name.toLowerCase().includes(searchTerm.toLowerCase()) || p.client_name.toLowerCase().includes(searchTerm.toLowerCase()))
+    .filter(p => {
+      if (mobileFilter === 'all') return true;
+      const { isFull } = projectCollection(p);
+      return mobileFilter === 'paid' ? isFull : !isFull;
+    });
+
   return (
-    <div className="space-y-4 md:space-y-8 pb-32 animate-in fade-in">
-      <div className="grid grid-cols-3 gap-2 md:gap-6">
-        <div className="bg-white rounded-2xl md:rounded-3xl border border-gray-100 p-3 md:p-8 shadow-sm flex justify-between items-center relative overflow-hidden min-w-0">
-          <div>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider md:tracking-widest mb-1 leading-tight"><span className="md:hidden">Pipeline</span><span className="hidden md:inline">Total Pipeline Value</span></p>
-            <h3 className="text-base md:text-3xl font-black text-gray-900 tracking-tighter truncate">{formatCurrency(pipelineStats.totalValue)}</h3>
-            <p className="hidden md:block text-[10px] font-bold text-gray-500 mt-2 uppercase">{projects.length} PROJECTS ACTIVE</p>
+    <div className="space-y-8 pb-32 animate-in fade-in">
+      {/* ===== Mobile layout ===== */}
+      <div className="md:hidden space-y-3 -mt-1">
+        <section className="bg-white rounded-2xl border border-gray-200 p-4 space-y-3">
+          <div className="flex items-end justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[13px] text-gray-500">Total pipeline value</p>
+              <p className="text-[26px] leading-8 font-semibold tracking-tight text-gray-900 truncate">{formatCurrency(pipelineStats.totalValue)}</p>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-[13px] text-gray-500">Realized revenue</p>
+              <p className="text-lg font-semibold text-emerald-700">{formatCurrency(pipelineStats.realizedValue)}</p>
+            </div>
           </div>
-          <div className="hidden md:flex w-16 h-16 bg-gray-50 rounded-2xl items-center justify-center text-gray-200"><Layers size={32} /></div>
+          <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+            <div className="h-full bg-emerald-700 rounded-full" style={{ width: `${Math.min(100, pipelineStats.realizationRate)}%` }} />
+          </div>
+          <p className="text-[13px] font-medium text-gray-700">Realization rate {pipelineStats.realizationRate.toFixed(1)}% · {projects.length} projects</p>
+        </section>
+
+        <div className="flex gap-2">
+          <label className="flex-1 flex items-center gap-2 h-11 px-3 rounded-xl bg-white border border-gray-200 text-gray-500">
+            <Search size={18} />
+            <span className="sr-only">Filter projects</span>
+            <input type="search" placeholder="Filter projects" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="flex-1 min-w-0 bg-transparent outline-none text-[15px] text-gray-900 placeholder:text-gray-400" />
+          </label>
+          {(!currentUser || currentUser.user_type === 'admin') && (
+            <button onClick={() => setShowImportModal(true)} aria-label="Bulk AI import" className="w-11 h-11 shrink-0 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-indigo-600">
+              <FileText size={18} />
+            </button>
+          )}
         </div>
-        <div className="bg-white rounded-2xl md:rounded-3xl border border-gray-100 p-3 md:p-8 shadow-sm flex justify-between items-center relative overflow-hidden min-w-0">
-          <div>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider md:tracking-widest mb-1 leading-tight"><span className="md:hidden">Realized</span><span className="hidden md:inline">Realized Revenue</span></p>
-            <h3 className="text-base md:text-3xl font-black text-emerald-600 tracking-tighter truncate">{formatCurrency(pipelineStats.realizedValue)}</h3>
-            <p className="hidden md:block text-[10px] font-bold text-emerald-500 mt-2 uppercase">{pipelineStats.settledCount} PROJECTS SETTLED</p>
-          </div>
-          <div className="hidden md:flex w-16 h-16 bg-emerald-50 rounded-full items-center justify-center text-emerald-500/20"><CheckCircle2 size={32} /></div>
+
+        <div className="flex gap-2 overflow-x-auto -mx-4 px-4">
+          {([['all', 'All'], ['awaiting', 'Awaiting payment'], ['paid', 'Fully paid']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setMobileFilter(key)}
+              aria-pressed={mobileFilter === key}
+              className={`shrink-0 h-9 px-4 rounded-full text-[13px] font-medium border ${mobileFilter === key ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-700 border-gray-300'}`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
-        <div className="bg-white rounded-2xl md:rounded-3xl border border-gray-100 p-3 md:p-8 shadow-sm flex justify-between items-center relative overflow-hidden min-w-0">
+
+        <ul className="space-y-2.5">
+          {mobileProjects.map(p => {
+            const { linkedVal, percent, isFull } = projectCollection(p);
+            const stream = streams.find(st => st.id === p.income_stream_id);
+            const projAllocs = allocations.filter(a => a.project_id === p.id);
+            const cost = projAllocs.reduce((sum, a) => sum + Number(a.amount), 0);
+            const barColor = isFull ? 'bg-emerald-700' : linkedVal > 0 ? 'bg-indigo-600' : 'bg-transparent';
+            return (
+              <li key={p.id}>
+                <button onClick={() => handleEdit(p)} className="w-full text-left bg-white rounded-2xl border border-gray-200 p-4 space-y-2.5 active:bg-gray-50">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="min-w-0 text-[15px] font-semibold text-gray-900 leading-snug line-clamp-2">{p.project_name}</span>
+                    <span className="shrink-0 text-[15px] font-semibold text-gray-900">{formatCurrency(p.project_value)}</span>
+                  </div>
+                  <p className="text-[13px] text-gray-500 truncate">{[p.client_name, stream?.name, p.date].filter(Boolean).join(' · ')}</p>
+                  <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                    <div className={`h-full rounded-full ${barColor}`} style={{ width: `${isFull ? 100 : percent}%` }} />
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    {isFull ? (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700">Fully paid</span>
+                    ) : linkedVal > 0 ? (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700">{percent.toFixed(0)}% collected</span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-orange-50 text-orange-700">Not linked</span>
+                    )}
+                    <span className="text-xs text-gray-500 truncate">Production {formatCurrency(cost)} · {projAllocs.length} assigned</span>
+                  </div>
+                </button>
+              </li>
+            );
+          })}
+          {mobileProjects.length === 0 && (
+            <li className="py-12 text-center text-sm text-gray-500">No projects match.</li>
+          )}
+        </ul>
+
+        {canCreateProject && (
+          <button
+            onClick={() => { setFormData(initialForm); setFormAllocations([]); setFormLinks([]); setEditingId(null); setShowModal(true); }}
+            aria-label="New project"
+            className="fixed right-4 bottom-24 z-30 w-14 h-14 rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 flex items-center justify-center"
+          >
+            <Plus size={24} />
+          </button>
+        )}
+      </div>
+
+      {/* ===== Desktop layout (unchanged) ===== */}
+      <div className="hidden md:block md:!mt-0 space-y-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white rounded-3xl border border-gray-100 p-8 shadow-sm flex justify-between items-center relative overflow-hidden">
           <div>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider md:tracking-widest mb-1 leading-tight"><span className="md:hidden">Rate</span><span className="hidden md:inline">Realization Rate</span></p>
-            <h3 className="text-base md:text-3xl font-black text-orange-600 tracking-tighter truncate">{pipelineStats.realizationRate.toFixed(1)}%</h3>
-            <p className="hidden md:block text-[10px] font-bold text-orange-500 mt-2 uppercase">OVERALL EFFICIENCY</p>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Total Pipeline Value</p>
+            <h3 className="text-3xl font-black text-gray-900 tracking-tighter">{formatCurrency(pipelineStats.totalValue)}</h3>
+            <p className="text-[10px] font-bold text-gray-500 mt-2 uppercase">{projects.length} PROJECTS ACTIVE</p>
           </div>
-          <div className="hidden md:flex w-16 h-16 bg-orange-50 rounded-full items-center justify-center text-orange-500/20"><Clock size={32} /></div>
+          <div className="w-16 h-16 bg-gray-50 rounded-2xl flex items-center justify-center text-gray-200"><Layers size={32} /></div>
+        </div>
+        <div className="bg-white rounded-3xl border border-gray-100 p-8 shadow-sm flex justify-between items-center relative overflow-hidden">
+          <div>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Realized Revenue</p>
+            <h3 className="text-3xl font-black text-emerald-600 tracking-tighter">{formatCurrency(pipelineStats.realizedValue)}</h3>
+            <p className="text-[10px] font-bold text-emerald-500 mt-2 uppercase">{pipelineStats.settledCount} PROJECTS SETTLED</p>
+          </div>
+          <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-500/20"><CheckCircle2 size={32} /></div>
+        </div>
+        <div className="bg-white rounded-3xl border border-gray-100 p-8 shadow-sm flex justify-between items-center relative overflow-hidden">
+          <div>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Realization Rate</p>
+            <h3 className="text-3xl font-black text-orange-600 tracking-tighter">{pipelineStats.realizationRate.toFixed(1)}%</h3>
+            <p className="text-[10px] font-bold text-orange-500 mt-2 uppercase">OVERALL EFFICIENCY</p>
+          </div>
+          <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center text-orange-500/20"><Clock size={32} /></div>
         </div>
       </div>
 
       <div className="bg-white border border-gray-200 rounded-[32px] shadow-sm overflow-hidden">
-        <header className="px-4 md:px-8 py-4 md:py-6 border-b border-gray-100 flex flex-col md:flex-row gap-3 md:justify-between md:items-center bg-gray-50/10">
-          <div className="relative w-full md:w-80">
+        <header className="px-8 py-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/10">
+          <div className="relative w-80">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
-            <input type="text" placeholder="Filter projects..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-3 md:py-2.5 bg-white border border-gray-200 rounded-xl text-[15px] md:text-xs font-medium md:font-bold focus:ring-2 focus:ring-gray-100 transition-all outline-none" />
+            <input type="text" placeholder="Filter projects..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-gray-100 transition-all outline-none" />
           </div>
-          <div className="flex gap-2 md:gap-3">
+          <div className="flex gap-3">
             {(!currentUser || currentUser.user_type === 'admin') && (
-              <button onClick={() => setShowImportModal(true)} className="flex-1 md:flex-none justify-center flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
+              <button onClick={() => setShowImportModal(true)} className="flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
                 <FileText size={16} /> Bulk AI Import
               </button>
             )}
             {(!currentUser || currentUser.user_type === 'admin' || currentUser.user_type === 'partner') && (
-              <button onClick={() => { setFormData(initialForm); setFormAllocations([]); setFormLinks([]); setEditingId(null); setShowModal(true); }} className="flex-1 md:flex-none justify-center flex items-center gap-2 bg-gray-900 text-white px-4 md:px-6 py-3 md:py-2.5 rounded-xl font-black text-sm md:text-xs md:uppercase md:tracking-widest shadow-lg active:scale-95 transition-all">
+              <button onClick={() => { setFormData(initialForm); setFormAllocations([]); setFormLinks([]); setEditingId(null); setShowModal(true); }} className="flex items-center gap-2 bg-gray-900 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all">
                 <Plus size={16} /> New Project
               </button>
             )}
@@ -471,6 +584,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
           ]}
         />
       </div>
+      </div>
 
       <Modal
         title={formData.id ? 'Edit Project' : 'Record New Project'}
@@ -479,6 +593,14 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         onSave={handleSave} 
         saveLabel="Save"
         maxWidth="max-w-2xl"
+        footerExtra={editingId && (currentUser?.user_type === 'admin' || currentUser?.user_type === 'partner') ? (
+          <button
+            onClick={() => { const id = editingId; setShowModal(false); setEditingId(null); handleDeleteProject(id); }}
+            className="md:hidden mr-auto -order-1 text-sm font-medium text-rose-600"
+          >
+            Delete
+          </button>
+        ) : undefined}
       >
         <div className="space-y-6">
           <div className="space-y-2">

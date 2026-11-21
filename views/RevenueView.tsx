@@ -37,6 +37,7 @@ const RevenueView: React.FC<RevenueViewProps> = ({ globalStart, globalEnd, curre
   const [showModal, setShowModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<(string | number)[]>([]);
+  const [mobileLinkFilter, setMobileLinkFilter] = useState<'all' | 'linked' | 'unlinked'>('all');
   
   const initialFormState: RevenueFormData = {
     date: new Date().toISOString().split('T')[0],
@@ -256,22 +257,133 @@ const RevenueView: React.FC<RevenueViewProps> = ({ globalStart, globalEnd, curre
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
 
+  // Mobile helpers — same rules as the desktop columns
+  const isRevenueLinked = (r: Revenue) => revenueLinks.some(link => Number(link.revenue_id) === Number(r.id));
+  const netAfterFee = (r: Revenue) => {
+    const feePct = (r.platform_fee_percent && r.platform_fee_percent > 0) ? r.platform_fee_percent : (streams.find(st => st.id === r.income_stream_id)?.platform_fee_percent || 0);
+    return r.total_sale - r.total_sale * (feePct / 100);
+  };
+  const mobileRevenues = filteredRevenues.filter(r =>
+    mobileLinkFilter === 'all' ? true : mobileLinkFilter === 'linked' ? isRevenueLinked(r) : !isRevenueLinked(r)
+  );
+  const mobileTotals = filteredRevenues.reduce((acc, r) => {
+    acc.gross += Number(r.total_sale);
+    acc.net += netAfterFee(r);
+    if (!isPartner) acc.profit += calculateProfit(r);
+    return acc;
+  }, { gross: 0, net: 0, profit: 0 });
+
   return (
-    <div className="space-y-4 md:space-y-8 pb-32 animate-in fade-in">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-6">
-        <div className="hidden md:block">
+    <div className="space-y-8 pb-32 animate-in fade-in">
+      {/* ===== Mobile layout ===== */}
+      <div className="md:hidden space-y-3 -mt-1">
+        <div className="flex gap-2">
+          <label className="flex-1 flex items-center gap-2 h-11 px-3 rounded-xl bg-white border border-gray-200 text-gray-500">
+            <Search size={18} />
+            <span className="sr-only">Search revenue</span>
+            <input type="search" placeholder="Search client or details" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="flex-1 min-w-0 bg-transparent outline-none text-[15px] text-gray-900 placeholder:text-gray-400" />
+          </label>
+          {!isPartner && (
+            <button onClick={() => setShowImportModal(true)} aria-label="Bulk AI import" className="w-11 h-11 shrink-0 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-indigo-600">
+              <FileText size={18} />
+            </button>
+          )}
+        </div>
+
+        <div className="flex gap-2">
+          {([['all', 'All'], ['linked', 'Linked'], ['unlinked', 'Unlinked']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setMobileLinkFilter(key)}
+              aria-pressed={mobileLinkFilter === key}
+              className={`h-9 px-4 rounded-full text-[13px] font-medium border ${mobileLinkFilter === key ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-700 border-gray-300'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className={`grid ${isPartner ? 'grid-cols-2' : 'grid-cols-3'} gap-2`}>
+          <div className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 min-w-0">
+            <p className="text-[11px] text-gray-500">Gross</p>
+            <p className="text-[15px] font-semibold text-gray-900 truncate">{formatCurrency(mobileTotals.gross)}</p>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 min-w-0">
+            <p className="text-[11px] text-gray-500">Net</p>
+            <p className="text-[15px] font-semibold text-gray-900 truncate">{formatCurrency(mobileTotals.net)}</p>
+          </div>
+          {!isPartner && (
+            <div className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 min-w-0">
+              <p className="text-[11px] text-gray-500">Agency profit</p>
+              <p className={`text-[15px] font-semibold truncate ${mobileTotals.profit >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>{formatCurrency(mobileTotals.profit)}</p>
+            </div>
+          )}
+        </div>
+
+        <ul className="space-y-2.5">
+          {mobileRevenues.map(r => {
+            const stream = streams.find(st => st.id === r.income_stream_id);
+            const linked = isRevenueLinked(r);
+            const profit = !isPartner ? calculateProfit(r) : 0;
+            const body = (
+              <>
+                <div className="flex items-start justify-between gap-3">
+                  <span className="min-w-0">
+                    <span className="block text-[15px] font-semibold text-gray-900 leading-snug truncate">{r.client_name}</span>
+                    <span className="block text-[13px] text-gray-500 truncate">{[r.date, stream?.name, r.project_description].filter(Boolean).join(' · ')}</span>
+                  </span>
+                  <span className="shrink-0 text-[15px] font-semibold text-gray-900">{formatCurrency(r.total_sale)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${linked ? 'bg-emerald-50 text-emerald-700' : 'bg-orange-50 text-orange-700'}`}>{linked ? 'Linked' : 'Not linked'}</span>
+                  <span className="text-xs text-gray-500 truncate">
+                    Net {formatCurrency(netAfterFee(r))}{!isPartner && <> · Profit <span className={profit >= 0 ? 'text-emerald-700' : 'text-rose-600'}>{formatCurrency(profit)}</span></>}
+                  </span>
+                </div>
+              </>
+            );
+            return (
+              <li key={r.id}>
+                {isPartner ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-2.5">{body}</div>
+                ) : (
+                  <button onClick={() => { setFormData(r as RevenueFormData); setShowModal(true); }} className="w-full text-left bg-white rounded-2xl border border-gray-200 p-4 space-y-2.5 active:bg-gray-50">{body}</button>
+                )}
+              </li>
+            );
+          })}
+          {mobileRevenues.length === 0 && (
+            <li className="py-12 text-center text-sm text-gray-500">No revenue in this period.</li>
+          )}
+        </ul>
+
+        {!isPartner && (
+          <button
+            onClick={() => { setFormData(initialFormState); setShowModal(true); }}
+            aria-label="New settlement"
+            className="fixed right-4 bottom-24 z-30 w-14 h-14 rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 flex items-center justify-center"
+          >
+            <Plus size={24} />
+          </button>
+        )}
+      </div>
+
+      {/* ===== Desktop layout (unchanged) ===== */}
+      <div className="hidden md:block md:!mt-0 space-y-8">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div>
           <h2 className="text-3xl font-extrabold text-gray-900 mb-1 tracking-tight">Revenue Records</h2>
           <p className="text-gray-500 font-medium text-sm">Settlements filtered by current global date range.</p>
         </div>
-        <div className="flex gap-2 md:gap-3">
+        <div className="flex gap-3">
           {!isPartner && (
-            <button onClick={() => setShowImportModal(true)} className="flex-1 md:flex-none justify-center flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
+            <button onClick={() => setShowImportModal(true)} className="flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
               <FileText size={18} /> Bulk AI Import
             </button>
           )}
           <button
             onClick={() => { setFormData(initialFormState); setShowModal(true); }}
-            className="flex-1 md:flex-none justify-center flex items-center gap-2 bg-gray-900 text-white px-4 md:px-6 py-3 md:py-2.5 rounded-xl font-black text-sm shadow-lg active:scale-95 transition-all"
+            className="flex items-center gap-2 bg-gray-900 text-white px-6 py-2.5 rounded-xl font-black text-sm shadow-lg active:scale-95 transition-all"
           >
             <Plus size={18} /> New Settlement
           </button>
@@ -279,10 +391,10 @@ const RevenueView: React.FC<RevenueViewProps> = ({ globalStart, globalEnd, curre
       </div>
 
       {/* Stream Summary Cards */}
-      <div className="flex md:grid md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-6 overflow-x-auto md:overflow-visible snap-x -mx-4 px-4 md:mx-0 md:px-0 pb-1">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {streamSummary.map((stream, idx) => (
-          <div key={idx} className="shrink-0 w-[78%] md:w-auto snap-start bg-white rounded-2xl md:rounded-[24px] border border-gray-100 p-4 md:p-6 shadow-sm hover:shadow-md transition-all">
-            <div className="flex items-center justify-between mb-3 md:mb-4">
+          <div key={idx} className="bg-white rounded-[24px] border border-gray-100 p-6 shadow-sm hover:shadow-md transition-all">
+            <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center font-black text-lg">
                   {stream.name.charAt(0)}
@@ -308,7 +420,7 @@ const RevenueView: React.FC<RevenueViewProps> = ({ globalStart, globalEnd, curre
       </div>
 
       <div className="bg-white border border-gray-200 rounded-[32px] shadow-sm overflow-hidden">
-        <div className="px-4 md:px-8 py-4 md:py-6 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4 bg-gray-50/10">
+        <div className="px-8 py-6 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gray-50/10">
           <div className="flex items-center gap-4 flex-1">
             <Search size={18} className="text-gray-400" />
             <input 
@@ -385,6 +497,7 @@ const RevenueView: React.FC<RevenueViewProps> = ({ globalStart, globalEnd, curre
           ]}
         />
       </div>
+      </div>
 
       <Modal 
         title={formData.id ? 'Edit Revenue Settlement' : 'New Revenue Settlement'} 
@@ -393,6 +506,14 @@ const RevenueView: React.FC<RevenueViewProps> = ({ globalStart, globalEnd, curre
         onSave={handleSave}
         saveLabel="Save Settlement"
         maxWidth="max-w-2xl"
+        footerExtra={formData.id && !isPartner ? (
+          <button
+            onClick={() => { const id = formData.id as number; setShowModal(false); handleDelete(id); }}
+            className="md:hidden mr-auto -order-1 text-sm font-medium text-rose-600"
+          >
+            Delete
+          </button>
+        ) : undefined}
       >
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-6">

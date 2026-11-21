@@ -24,7 +24,8 @@ import {
   Target,
   Briefcase,
   AlertCircle,
-  FileText
+  FileText,
+  ChevronDown
 } from 'lucide-react';
 
 interface PaymentsViewProps {
@@ -53,6 +54,8 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
   const [showSettlementModal, setShowSettlementModal] = useState(false);
   const [showOtherModal, setShowOtherModal] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [mobileTab, setMobileTab] = useState<'pending' | 'history'>('pending');
+  const [mobileOpenIdx, setMobileOpenIdx] = useState<number | null>(0);
   const [showGoalModal, setShowGoalModal] = useState(false);
 
   const [selectedMember, setSelectedMember] = useState<TeamMember | null>(null);
@@ -810,60 +813,213 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
     return { partnersOwed, teamOwed, partnersSettled, teamSettled };
   }, [combinedAuditPool, payments, globalStart, globalEnd]);
 
+  // Mobile: open the same review/settle flow the desktop card uses
+  const openReview = (status: any) => {
+    if (status.type === 'team') {
+      setSelectedMember(status.member);
+      setSelectedRevenueKeys(status.unpaidCommissions.map((c: any) => c.key));
+      setSelectedOtherIds(status.unpaidOthers.map((o: any) => o.id));
+      setSelectedAllocIds(status.unpaidAllocs.map((a: any) => a.id));
+      setShowSettlementModal(true);
+    } else {
+      setSelectedGoal(status.goal);
+      setPaymentMeta({ ...paymentMeta, amount: status.totalOwed });
+      setShowGoalModal(true);
+    }
+  };
+  const openOtherPayment = (category: 'deduction' | 'bonus') => {
+    setOtherFormData({ date: new Date().toISOString().split('T')[0], category, amount: 0, description: '', recipient_id: undefined, recipient_type: 'team' });
+    setShowOtherModal(true);
+  };
+  const periodPayments = payments
+    .filter(p => (!globalStart || p.date >= globalStart) && (!globalEnd || p.date <= globalEnd))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const teamPoolCount = combinedAuditPool.filter(st => st.type === 'team').length;
+
   return (
-    <div className="space-y-5 md:space-y-12 pb-32 animate-in fade-in">
+    <div className="space-y-12 pb-32 animate-in fade-in">
+      {/* ===== Mobile layout ===== */}
+      <div className="md:hidden space-y-3 -mt-1">
+        <div role="tablist" className="grid grid-cols-2 gap-1 p-1 bg-gray-100 rounded-xl">
+          {([['pending', 'Pending'], ['history', 'History']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              role="tab"
+              aria-selected={mobileTab === key}
+              onClick={() => setMobileTab(key)}
+              className={`h-10 rounded-lg text-sm font-medium ${mobileTab === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {mobileTab === 'pending' && (
+          <>
+            <div className="bg-orange-50 border border-orange-200 rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium text-orange-900">Total owed</p>
+                <p className="text-xs text-orange-800">Partners {formatCurrency(paymentsSummary.partnersOwed)} · Team {formatCurrency(paymentsSummary.teamOwed)}</p>
+              </div>
+              <p className="text-xl font-semibold text-orange-900 shrink-0">{formatCurrency(paymentsSummary.partnersOwed + paymentsSummary.teamOwed)}</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => openOtherPayment('deduction')} className="h-11 rounded-xl border border-gray-200 bg-white text-sm font-medium text-rose-700 flex items-center justify-center gap-1.5">
+                <Minus size={16} /> Deduction
+              </button>
+              <button onClick={() => openOtherPayment('bonus')} className="h-11 rounded-xl border border-gray-200 bg-white text-sm font-medium text-gray-900 flex items-center justify-center gap-1.5">
+                <Plus size={16} /> Adjustment
+              </button>
+            </div>
+
+            <p className="text-xs font-medium uppercase tracking-wider text-gray-500 pt-1">{teamPoolCount} {teamPoolCount === 1 ? 'person' : 'people'} to pay</p>
+
+            <ul className="space-y-2.5">
+              {combinedAuditPool.map((status: any, idx) => {
+                const isOpen = mobileOpenIdx === idx;
+                const isGoal = status.type === 'goal';
+                const name = isGoal ? status.goal.name : status.member.name;
+                const sub = isGoal ? 'Savings target' : status.member.role;
+                const revShare = isGoal ? 0 : status.unpaidCommissions.reduce((sum: number, c: any) => sum + c.grossShareValue, 0);
+                const allocSum = isGoal ? 0 : status.unpaidAllocs.reduce((sum: number, a: any) => sum + Number(a.amount), 0);
+                const otherSum = isGoal ? 0 : status.unpaidOthers.reduce((sum: number, o: any) => sum + (o.category === 'deduction' ? -o.amount : o.amount), 0);
+                const lessDeductions = Math.max(0, revShare + allocSum + otherSum - status.totalOwed);
+                return (
+                  <li key={idx} className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+                    <button onClick={() => setMobileOpenIdx(isOpen ? null : idx)} aria-expanded={isOpen} className="w-full flex items-center gap-3 px-4 py-3.5 text-left">
+                      <span className={`w-10 h-10 shrink-0 rounded-full flex items-center justify-center text-[15px] font-semibold ${isGoal ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-700'}`}>
+                        {isGoal ? <PiggyBank size={18} /> : name.charAt(0)}
+                      </span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-[15px] font-semibold text-gray-900 truncate">{name}</span>
+                        <span className="block text-xs text-gray-500">{sub}</span>
+                      </span>
+                      <span className="text-right shrink-0">
+                        <span className="block text-[11px] text-gray-500">{isGoal ? 'To save' : 'Net due'}</span>
+                        <span className="block text-[15px] font-semibold text-gray-900">{formatCurrency(status.totalOwed)}</span>
+                      </span>
+                      <ChevronDown size={18} className={`shrink-0 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {isOpen && (
+                      <div className="border-t border-gray-100 px-4 pt-3 pb-4 space-y-2">
+                        {!isGoal && (
+                          <>
+                            {status.unpaidCommissions.length > 0 && (
+                              <div className="flex justify-between text-[13px]"><span className="text-gray-600">Revenue shares ({status.unpaidCommissions.length})</span><span className="font-medium text-gray-900">{formatCurrency(revShare)}</span></div>
+                            )}
+                            {status.unpaidAllocs.length > 0 && (
+                              <div className="flex justify-between text-[13px]"><span className="text-gray-600">Production work ({status.unpaidAllocs.length})</span><span className="font-medium text-gray-900">{formatCurrency(allocSum)}</span></div>
+                            )}
+                            {status.unpaidOthers.length > 0 && (
+                              <div className="flex justify-between text-[13px]"><span className="text-gray-600">Bonuses & adjustments ({status.unpaidOthers.length})</span><span className={`font-medium ${otherSum < 0 ? 'text-rose-700' : 'text-gray-900'}`}>{formatCurrency(otherSum)}</span></div>
+                            )}
+                            {lessDeductions > 0.005 && (
+                              <div className="flex justify-between text-[13px]"><span className="text-gray-600">Less: connects & production</span><span className="font-medium text-rose-700">−{formatCurrency(lessDeductions)}</span></div>
+                            )}
+                          </>
+                        )}
+                        <div className="flex justify-between pt-2 border-t border-dashed border-gray-200 text-sm"><span className="font-semibold text-gray-900">{isGoal ? 'Pending allocation' : 'Net amount due'}</span><span className="font-semibold text-gray-900">{formatCurrency(status.totalOwed)}</span></div>
+                        <button onClick={() => openReview(status)} className={`w-full h-11 mt-1 rounded-xl text-sm font-medium text-white ${isGoal ? 'bg-indigo-600' : 'bg-gray-900'}`}>
+                          {isGoal ? 'Settle savings' : 'Review & pay'}
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+              {combinedAuditPool.length === 0 && (
+                <li className="py-12 text-center text-sm text-gray-500">Nothing to pay right now.</li>
+              )}
+            </ul>
+          </>
+        )}
+
+        {mobileTab === 'history' && (
+          <>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium text-emerald-900">Paid this period</p>
+                <p className="text-xs text-emerald-800">Partners {formatCurrency(paymentsSummary.partnersSettled)} · Team {formatCurrency(paymentsSummary.teamSettled)}</p>
+              </div>
+              <p className="text-xl font-semibold text-emerald-900 shrink-0">{formatCurrency(paymentsSummary.partnersSettled + paymentsSummary.teamSettled)}</p>
+            </div>
+            <ul className="bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100">
+              {periodPayments.map(p => (
+                <li key={p.id} className="flex items-center gap-1 pl-4 pr-1">
+                  <button onClick={() => { setViewingPayment(p); setShowReportModal(true); }} className="flex-1 min-w-0 flex items-center justify-between gap-3 py-3 text-left">
+                    <span className="min-w-0">
+                      <span className="block text-[15px] font-semibold text-gray-900 truncate">{p.recipient_name}</span>
+                      <span className="block text-xs text-gray-500 capitalize">{p.date} · {p.payment_type}</span>
+                    </span>
+                    <span className="shrink-0 text-[15px] font-semibold text-emerald-700">{formatCurrency(p.total_amount)}</span>
+                  </button>
+                  <button onClick={() => handleDeletePayment(p.id)} aria-label={`Delete payment to ${p.recipient_name}`} className="w-11 h-11 shrink-0 flex items-center justify-center text-gray-400 rounded-lg">
+                    <Trash2 size={16} />
+                  </button>
+                </li>
+              ))}
+              {periodPayments.length === 0 && (
+                <li className="py-12 text-center text-sm text-gray-500">No payments in this period.</li>
+              )}
+            </ul>
+          </>
+        )}
+      </div>
+
+      {/* ===== Desktop layout (unchanged; each block hidden on phones, pop-ups stay shared) ===== */}
       {/* Summary Card */}
-      <div className="grid grid-cols-2 gap-2 md:gap-4">
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3.5 md:p-6 min-w-0">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider md:tracking-widest mb-2 md:mb-4">
+      <div className="hidden md:grid md:!mt-0 grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">
             Total Outstanding
           </p>
-          <p className="text-3xl font-black text-gray-900 mb-2 md:mb-4">
+          <p className="text-3xl font-black text-gray-900 mb-4">
             {formatCurrency(paymentsSummary.partnersOwed + paymentsSummary.teamOwed)}
           </p>
           <div className="space-y-2">
-            <div className="flex justify-between gap-2 text-xs md:text-sm">
+            <div className="flex justify-between text-sm">
               <span className="text-gray-500">Partners</span>
               <span className="font-bold text-gray-700">{formatCurrency(paymentsSummary.partnersOwed)}</span>
             </div>
-            <div className="flex justify-between gap-2 text-xs md:text-sm">
-              <span className="text-gray-500"><span className="md:hidden">Team</span><span className="hidden md:inline">Team production</span></span>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Team production</span>
               <span className="font-bold text-gray-700">{formatCurrency(paymentsSummary.teamOwed)}</span>
             </div>
           </div>
         </div>
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3.5 md:p-6 min-w-0">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider md:tracking-widest mb-2 md:mb-4">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">
             Total Settled This Period
           </p>
-          <p className="text-3xl font-black text-emerald-600 mb-2 md:mb-4">
+          <p className="text-3xl font-black text-emerald-600 mb-4">
             {formatCurrency(paymentsSummary.partnersSettled + paymentsSummary.teamSettled)}
           </p>
           <div className="space-y-2">
-            <div className="flex justify-between gap-2 text-xs md:text-sm">
+            <div className="flex justify-between text-sm">
               <span className="text-gray-500">Partners</span>
               <span className="font-bold text-emerald-600">{formatCurrency(paymentsSummary.partnersSettled)}</span>
             </div>
-            <div className="flex justify-between gap-2 text-xs md:text-sm">
-              <span className="text-gray-500"><span className="md:hidden">Team</span><span className="hidden md:inline">Team production</span></span>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Team production</span>
               <span className="font-bold text-emerald-600">{formatCurrency(paymentsSummary.teamSettled)}</span>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-3">
+      <div className="hidden md:flex justify-between items-center">
         <div>
-          <h2 className="text-lg md:text-3xl font-extrabold text-gray-900 tracking-tight"><span className="md:hidden">Pending payouts</span><span className="hidden md:inline">Authorization Panel</span></h2>
-          <p className="hidden md:block text-gray-500 font-medium text-sm">Verify audits and release funds for team payables and wealth goals.</p>
+          <h2 className="text-3xl font-extrabold text-gray-900 tracking-tight">Authorization Panel</h2>
+          <p className="text-gray-500 font-medium text-sm">Verify audits and release funds for team payables and wealth goals.</p>
         </div>
-        <div className="grid grid-cols-2 md:flex md:items-center gap-2">
+        <div className="flex items-center gap-2">
           <button
             onClick={() => {
               setOtherFormData({ date: new Date().toISOString().split('T')[0], category: 'deduction', amount: 0, description: '', recipient_id: undefined, recipient_type: 'team' });
               setShowOtherModal(true);
             }}
-            className="flex items-center justify-center gap-2 bg-rose-600 text-white px-3 md:px-6 py-3 md:py-2.5 rounded-xl font-black text-[13px] md:text-xs md:uppercase md:tracking-widest shadow-lg active:scale-95 transition-all"
+            className="flex items-center gap-2 bg-rose-600 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all"
           >
             <Minus size={16} /> Log Deduction
           </button>
@@ -872,23 +1028,23 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
               setOtherFormData({ date: new Date().toISOString().split('T')[0], category: 'bonus', amount: 0, description: '', recipient_id: undefined, recipient_type: 'team' });
               setShowOtherModal(true);
             }}
-            className="flex items-center justify-center gap-2 bg-gray-900 text-white px-3 md:px-6 py-3 md:py-2.5 rounded-xl font-black text-[13px] md:text-xs md:uppercase md:tracking-widest shadow-lg active:scale-95 transition-all"
+            className="flex items-center gap-2 bg-gray-900 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all"
           >
             <Plus size={16} /> Log Adjustment
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-6">
+      <div className="hidden md:grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {combinedAuditPool.map((status, idx) => (
-          <div key={idx} className={`bg-white rounded-2xl md:rounded-[32px] border ${status.type === 'goal' ? 'border-indigo-100' : 'border-gray-100'} p-4 md:p-6 shadow-sm hover:shadow-lg transition-all group relative overflow-hidden`}>
+          <div key={idx} className={`bg-white rounded-[32px] border ${status.type === 'goal' ? 'border-indigo-100' : 'border-gray-100'} p-6 shadow-sm hover:shadow-lg transition-all group relative overflow-hidden`}>
             {status.type === 'goal' && (
               <div className="absolute top-4 right-4 text-indigo-100 rotate-12 group-hover:rotate-0 transition-transform">
                 <Target size={40} strokeWidth={1.5} />
               </div>
             )}
-            <div className="flex items-center gap-3 md:gap-4 mb-3 md:mb-6">
-              <div className={`w-10 h-10 md:w-12 md:h-12 shrink-0 ${status.type === 'goal' ? 'bg-indigo-600 text-white' : 'bg-gray-900 text-white'} rounded-2xl flex items-center justify-center font-black text-lg`}>
+            <div className="flex items-center gap-4 mb-6">
+              <div className={`w-12 h-12 ${status.type === 'goal' ? 'bg-indigo-600 text-white' : 'bg-gray-900 text-white'} rounded-2xl flex items-center justify-center font-black text-lg`}>
                 {status.type === 'goal' ? <PiggyBank size={24} /> : status.member.name.charAt(0)}
               </div>
               <div>
@@ -896,11 +1052,11 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
                 <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">{status.type === 'goal' ? 'Savings Target' : status.member.role}</p>
               </div>
             </div>
-            <div className={`rounded-xl md:rounded-2xl px-4 py-3 md:p-5 mb-3 md:mb-6 flex md:flex-col justify-between md:justify-start items-center border ${status.type === 'goal' ? 'bg-indigo-50 border-indigo-100' : 'bg-gray-50 border-gray-100'}`}>
+            <div className={`rounded-2xl p-5 mb-6 flex flex-col items-center border ${status.type === 'goal' ? 'bg-indigo-50 border-indigo-100' : 'bg-gray-50 border-gray-100'}`}>
               <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">
                 Pending {status.type === 'goal' ? 'Allocation' : 'Balance'}
               </span>
-              <span className={`text-xl md:text-3xl font-black tracking-tighter ${status.type === 'goal' ? 'text-indigo-600' : 'text-gray-900'}`}>{formatCurrency(status.totalOwed)}</span>
+              <span className={`text-3xl font-black tracking-tighter ${status.type === 'goal' ? 'text-indigo-600' : 'text-gray-900'}`}>{formatCurrency(status.totalOwed)}</span>
             </div>
             <button 
               onClick={() => { 
@@ -916,7 +1072,7 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
                   setShowGoalModal(true);
                 }
               }} 
-              className={`w-full py-3 md:py-3.5 ${status.type === 'goal' ? 'bg-indigo-600' : 'bg-gray-900'} text-white rounded-xl font-black text-sm md:text-[10px] md:uppercase md:tracking-widest hover:opacity-90 transition-all flex items-center justify-center gap-2 shadow-sm`}
+              className={`w-full py-3.5 ${status.type === 'goal' ? 'bg-indigo-600' : 'bg-gray-900'} text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:opacity-90 transition-all flex items-center justify-center gap-2 shadow-sm`}
             >
               <ArrowUpCircle size={16} /> Review & {status.type === 'goal' ? 'Settle Savings' : 'Pay Member'}
             </button>
@@ -1193,29 +1349,14 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
         </Modal>
       )}
 
-      <div className="bg-white border border-gray-100 rounded-[32px] shadow-sm overflow-hidden">
-        <header className="px-4 md:px-8 py-4 md:py-5 border-b border-gray-50 flex items-center justify-between bg-gray-50/20">
+      <div className="hidden md:block bg-white border border-gray-100 rounded-[32px] shadow-sm overflow-hidden">
+        <header className="px-8 py-5 border-b border-gray-50 flex items-center justify-between bg-gray-50/20">
           <div className="flex items-center gap-3">
             <History size={18} className="text-gray-400" />
             <h3 className="font-black text-base text-gray-900 uppercase tracking-widest">Disbursement Logs</h3>
           </div>
         </header>
-        {/* Mobile: list */}
-        <ul className="md:hidden divide-y divide-gray-100">
-          {payments.filter(p => (!globalStart || p.date >= globalStart) && (!globalEnd || p.date <= globalEnd)).sort((a,b) => b.date.localeCompare(a.date)).map(p => (
-            <li key={p.id} className="flex items-center gap-2 pl-4 pr-2 py-3">
-              <button onClick={() => { setViewingPayment(p); setShowReportModal(true); }} className="flex-1 min-w-0 flex items-center justify-between gap-3 text-left">
-                <span className="min-w-0">
-                  <span className="block text-[15px] font-semibold text-gray-900 truncate">{p.recipient_name}</span>
-                  <span className="block text-xs text-gray-500 capitalize">{p.date} · {p.payment_type}</span>
-                </span>
-                <span className="shrink-0 text-[15px] font-semibold text-indigo-600">{formatCurrency(p.total_amount)}</span>
-              </button>
-              <button onClick={() => handleDeletePayment(p.id)} aria-label="Delete payment" className="w-10 h-10 shrink-0 flex items-center justify-center text-rose-400 rounded-lg"><Trash2 size={16} /></button>
-            </li>
-          ))}
-        </ul>
-        <div className="hidden md:block overflow-x-auto">
+        <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead className="bg-gray-50/50 text-gray-400 text-[9px] font-black uppercase tracking-widest border-b border-gray-100">
               <tr><th className="px-8 py-4">Date</th><th className="px-8 py-4">Recipient</th><th className="px-8 py-4">Type</th><th className="px-8 py-4 text-right">Settled Amount</th><th className="px-8 py-4 text-center">Actions</th></tr>

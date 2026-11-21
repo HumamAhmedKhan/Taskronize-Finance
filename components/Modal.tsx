@@ -39,15 +39,15 @@ const Modal: React.FC<ModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-0 md:p-4">
       <div
         className="absolute inset-0 bg-gray-900/40 backdrop-blur-sm transition-opacity"
         onClick={onClose}
       />
 
-      <div className={`relative bg-white rounded-[32px] shadow-2xl ${maxWidth} w-full max-h-[90vh] overflow-hidden flex flex-col border border-gray-100`}>
-        <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100">
-          <h2 className="text-xl font-extrabold text-gray-900 tracking-tight">{title}</h2>
+      <div className={`relative bg-white rounded-t-3xl md:rounded-[32px] shadow-2xl ${maxWidth} w-full max-h-[92vh] md:max-h-[90vh] overflow-hidden flex flex-col border border-gray-100`}>
+        <div className="flex items-center justify-between gap-3 px-5 md:px-8 py-4 md:py-6 border-b border-gray-100">
+          <h2 className="text-lg md:text-xl font-extrabold text-gray-900 tracking-tight">{title}</h2>
           <button
             onClick={onClose}
             className="p-1.5 text-gray-400 hover:text-gray-900 hover:bg-gray-50 rounded-xl transition-all"
@@ -56,7 +56,7 @@ const Modal: React.FC<ModalProps> = ({
           </button>
         </div>
 
-        <div className="overflow-y-auto p-8 flex-1 scrollbar-hide">
+        <div className="overflow-y-auto p-5 md:p-8 flex-1 scrollbar-hide">
           <style>
             {`.scrollbar-hide::-webkit-scrollbar { display: none; }`}
           </style>
@@ -65,7 +65,7 @@ const Modal: React.FC<ModalProps> = ({
           </div>
         </div>
 
-        <div className="flex justify-end items-center gap-6 px-8 py-6 bg-gray-50/50 border-t border-gray-100">
+        <div className="flex justify-end items-center gap-4 md:gap-6 px-5 md:px-8 pt-4 md:py-6 pb-[max(1rem,env(safe-area-inset-bottom))] md:pb-6 bg-gray-50/50 border-t border-gray-100">
           <button
             onClick={onClose}
             className="text-gray-500 font-bold hover:text-gray-900 transition-all text-sm"
