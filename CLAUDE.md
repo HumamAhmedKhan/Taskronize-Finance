@@ -36,6 +36,8 @@ React 19 + TypeScript + Vite + Supabase. No Redux/Zustand — each view holds it
 - `db` — thin wrapper: `get<T>`, `insert<T>`, `update<T>`, `delete` — always selects `*`
 
 ## Auth & Permissions
+- Login uses Supabase Auth: username → hidden email `loginEmail()` in `lib/supabase.ts` (must match DB `public.login_email()` and the `admin-users` edge function). `users.auth_id` links the CRM user to `auth.users`.
+- Creating users / setting another user's password goes through the `admin-users` edge function (`adminUsers()` helper) — never write `password_hash` from the browser.
 - `AuthContext` provides `canAccess(page)` — see `App.tsx`
 - User types: `admin` (bypasses all checks), `team_member`, `partner`
 - Page keys: `dashboard`, `revenue`, `payments`, `expenses`, `projects`, `projectManagement`, `incomeStreams`, `team`, `users`, `monthlyClosing`, `backup`, `aiAdvisor`, `automations`
@@ -112,3 +114,4 @@ views/
 - `undefined !== 'none'` is true; always check for truthy value before comparing to 'none'.
 - Tab redirect on login must also run on page reload (useEffect) — not just in login().
 - Hidden md:hidden blocks still get space-y margin; add md:!mt-0 to first desktop block.
+- Await supabase.auth.signOut() before clearing user; fast reloads otherwise restore session.

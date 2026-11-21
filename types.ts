@@ -25,7 +25,8 @@ export interface PagePermissions {
 export interface User {
   id: number;
   username: string;
-  password_hash: string;
+  password_hash: string | null;
+  auth_id: string | null;
   name: string;
   email: string | null;
   user_type: 'admin' | 'team_member' | 'partner';

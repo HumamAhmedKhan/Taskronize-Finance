@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useContext } from 'react';
-import { supabase, db } from '../lib/supabase';
+import { supabase, db, adminUsers, USERNAME_PATTERN } from '../lib/supabase';
 import { User, PagePermissions, PermissionLevel, IncomeStream } from '../types';
 import { AuthContext } from '../App';
-import { Plus, Shield, User as UserIcon, Check, Edit2, ShieldAlert, X, Eye, EyeOff } from 'lucide-react';
+import { Plus, Shield, User as UserIcon, Check, Edit2, ShieldAlert, X } from 'lucide-react';
 
 const UsersView: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
@@ -14,7 +14,6 @@ const UsersView: React.FC = () => {
   const [formData, setFormData] = useState<Partial<User>>({
     name: '',
     username: '',
-    password_hash: '',
     user_type: 'team_member',
     linked_income_stream_id: null,
     linked_income_stream_ids: [],
@@ -38,7 +37,6 @@ const UsersView: React.FC = () => {
     }
   });
 
-  const [revealedPasswords, setRevealedPasswords] = useState<Set<number>>(new Set());
   const [resetPassword, setResetPassword] = useState('');
 
   const auth = useContext(AuthContext);
@@ -86,14 +84,20 @@ const UsersView: React.FC = () => {
         };
       }
 
-      if (dataToSave.id) {
-        if (resetPassword) {
-          dataToSave.password_hash = resetPassword;
+      const { password_hash, auth_id, ...profile } = dataToSave;
+      if (!USERNAME_PATTERN.test(profile.username || '')) {
+        throw new Error('Username may only contain letters, numbers, dots, dashes and underscores (2-40 characters).');
+      }
+
+      if (profile.id) {
+        const previousUsername = users.find(u => u.id === profile.id)?.username;
+        const updatedUser = await db.update<User>('users', profile.id, profile);
+        if (resetPassword || updatedUser.username !== previousUsername) {
+          await adminUsers({ action: 'sync_login', user_id: updatedUser.id, password: resetPassword || undefined });
         }
-        const updatedUser = await db.update<User>('users', dataToSave.id, dataToSave);
-        setUsers(prev => prev.map(u => u.id === updatedUser.id ? updatedUser : u));
+        await loadData();
       } else {
-        await db.insert('users', dataToSave);
+        await adminUsers({ action: 'create', username: profile.username, password: resetPassword, profile });
         await loadData();
       }
       setShowModal(false);
@@ -206,25 +210,11 @@ const UsersView: React.FC = () => {
               </div>
               <p className="text-slate-500 text-sm">@{user.username}</p>
               <div className="flex items-center gap-2 mt-1 mb-4">
-                <span className="text-slate-400 text-xs font-medium">Password:</span>
-                {user.password_hash?.startsWith('$2a$') || user.password_hash?.startsWith('$2b$') ? (
-                  <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md font-medium">Hashed — reset to reveal</span>
-                ) : revealedPasswords.has(user.id) ? (
-                  <span className="text-slate-700 font-mono text-xs">{user.password_hash}</span>
+                <span className="text-slate-400 text-xs font-medium">Login:</span>
+                {user.auth_id ? (
+                  <span className="text-xs text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md font-medium">Active</span>
                 ) : (
-                  <span className="text-slate-400 font-mono text-xs tracking-widest">••••••••</span>
-                )}
-                {!user.password_hash?.startsWith('$2a$') && !user.password_hash?.startsWith('$2b$') && (
-                  <button
-                    onClick={() => setRevealedPasswords(prev => {
-                      const next = new Set(prev);
-                      next.has(user.id) ? next.delete(user.id) : next.add(user.id);
-                      return next;
-                    })}
-                    className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
-                  >
-                    {revealedPasswords.has(user.id) ? <EyeOff size={13} /> : <Eye size={13} />}
-                  </button>
+                  <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md font-medium">Not set — set a password</span>
                 )}
               </div>
               
@@ -277,23 +267,13 @@ const UsersView: React.FC = () => {
                   <input
                     type="text"
                     required={!formData.id}
-                    value={formData.id ? resetPassword : (formData.password_hash || '')}
-                    onChange={e => formData.id ? setResetPassword(e.target.value) : setFormData({...formData, password_hash: e.target.value})}
+                    minLength={6}
+                    value={resetPassword}
+                    onChange={e => setResetPassword(e.target.value)}
                     className="w-full px-4 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20"
                     placeholder={formData.id ? 'New password (optional)...' : 'Set temporary password'}
                   />
                 </div>
-
-                {auth?.user?.user_type === 'admin' && formData.id && (
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Current Password</label>
-                    <div className="w-full px-4 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-600 font-mono text-sm">
-                      {formData.password_hash?.startsWith('$2a$') || formData.password_hash?.startsWith('$2b$')
-                        ? '(set before plaintext storage — reset to set a readable one)'
-                        : (formData.password_hash || '(not set)')}
-                    </div>
-                  </div>
-                )}
 
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">User Type</label>
