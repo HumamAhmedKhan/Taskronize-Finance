@@ -353,7 +353,7 @@ const App: React.FC = () => {
 
   const renderContent = () => {
     switch (activeTab) {
-      case 'dashboard': return <Dashboard startDate={startDate} endDate={endDate} />;
+      case 'dashboard': return <Dashboard startDate={startDate} endDate={endDate} onNavigate={goToTab} canOpen={(id) => isTabVisible(id as keyof PagePermissions)} />;
       case 'aiAdvisor': return <AIAdvisorView />;
       case 'revenue': return <RevenueView globalStart={startDate} globalEnd={endDate} currentUser={user} />;
       case 'projects': return <ProjectsView globalStart={startDate} globalEnd={endDate} currentUser={user} />;

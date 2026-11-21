@@ -111,3 +111,4 @@ views/
 - Use indexOf('-') not split('-') for keys containing member names (hyphens break it).
 - `undefined !== 'none'` is true; always check for truthy value before comparing to 'none'.
 - Tab redirect on login must also run on page reload (useEffect) — not just in login().
+- Hidden md:hidden blocks still get space-y margin; add md:!mt-0 to first desktop block.

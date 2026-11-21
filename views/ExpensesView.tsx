@@ -21,6 +21,7 @@ const ExpensesView: React.FC<ExpensesViewProps> = ({ globalStart, globalEnd }) =
   const [streams, setStreams] = useState<IncomeStream[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [mobileTab, setMobileTab] = useState<'expenses' | 'subscriptions'>('expenses');
   const [showModal, setShowModal] = useState(false);
   const [showRecModal, setShowRecModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -128,9 +129,116 @@ const ExpensesView: React.FC<ExpensesViewProps> = ({ globalStart, globalEnd }) =
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
 
+  // Mobile helpers
+  const filteredExpenses = expenses.filter(e => e.description.toLowerCase().includes(searchTerm.toLowerCase()));
+  const filteredRecurring = recurring.filter(r => r.name.toLowerCase().includes(searchTerm.toLowerCase()));
+  const spentTotal = filteredExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
+  const activeRecurring = recurring.filter(r => r.is_active);
+  const monthlyBurn = activeRecurring.reduce((sum, r) => sum + Number(r.amount), 0);
+  const expenseTag = (e: Expense) => e.is_production
+    ? { label: 'Production', cls: 'bg-orange-50 text-orange-700' }
+    : e.type === 'fixed'
+      ? { label: 'Fixed', cls: 'bg-gray-100 text-gray-700' }
+      : { label: 'Variable', cls: 'bg-emerald-50 text-emerald-700' };
+  const isPaidThisMonthRec = (r: RecurringExpense) => {
+    const now = new Date();
+    const paidAt = r.paid_at ? new Date(r.paid_at) : null;
+    return paidAt !== null && paidAt.getMonth() === now.getMonth() && paidAt.getFullYear() === now.getFullYear();
+  };
+  const openNewRecurring = () => { setRecData({ name: '', amount: 0, category: 'Fixed: Operational Quota', day_of_month: 1, is_active: true }); setShowRecModal(true); };
+
   return (
     <div className="space-y-12 pb-32 animate-in fade-in">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+      {/* ===== Mobile layout ===== */}
+      <div className="md:hidden space-y-3 -mt-1">
+        <div role="tablist" className="grid grid-cols-2 gap-1 p-1 bg-gray-100 rounded-xl">
+          {([['expenses', 'Expenses'], ['subscriptions', 'Subscriptions']] as const).map(([key, label]) => (
+            <button key={key} role="tab" aria-selected={mobileTab === key} onClick={() => setMobileTab(key)}
+              className={`h-10 rounded-lg text-sm font-medium ${mobileTab === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 min-w-0">
+            <p className="text-xs text-gray-500">{mobileTab === 'expenses' ? 'Spent this period' : 'Monthly total'}</p>
+            <p className="text-lg font-semibold text-gray-900 truncate">{formatCurrency(mobileTab === 'expenses' ? spentTotal : monthlyBurn)}</p>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 min-w-0">
+            <p className="text-xs text-gray-500">{mobileTab === 'expenses' ? 'Entries' : 'Active subscriptions'}</p>
+            <p className="text-lg font-semibold text-gray-900">{mobileTab === 'expenses' ? filteredExpenses.length : activeRecurring.length}</p>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <label className="flex-1 flex items-center gap-2 h-11 px-3 rounded-xl bg-white border border-gray-200 text-gray-500">
+            <Search size={18} />
+            <span className="sr-only">{mobileTab === 'expenses' ? 'Search expenses' : 'Search subscriptions'}</span>
+            <input type="search" placeholder={mobileTab === 'expenses' ? 'Search expenses' : 'Search subscriptions'} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="flex-1 min-w-0 bg-transparent outline-none text-[15px] text-gray-900 placeholder:text-gray-400" />
+          </label>
+          {mobileTab === 'expenses' && (
+            <button onClick={() => setShowImportModal(true)} aria-label="Bulk AI import" className="w-11 h-11 shrink-0 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-indigo-600">
+              <FileText size={18} />
+            </button>
+          )}
+        </div>
+
+        {mobileTab === 'expenses' ? (
+          <ul className="space-y-2">
+            {filteredExpenses.map(e => {
+              const tag = expenseTag(e);
+              const stream = e.income_stream_id ? streams.find(st => st.id === e.income_stream_id) : null;
+              return (
+                <li key={e.id}>
+                  <button onClick={() => { setFormData(e); setShowModal(true); }} className="w-full text-left bg-white rounded-2xl border border-gray-200 px-4 py-3 flex items-center gap-3 active:bg-gray-50">
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-[15px] font-semibold text-gray-900 truncate">{e.description}</span>
+                      <span className="flex items-center gap-1.5 mt-1 text-xs text-gray-500 min-w-0">
+                        <span className={`shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium ${tag.cls}`}>{tag.label}</span>
+                        <span className="truncate">{[e.date, e.category.replace(/^(Fixed|Variable): /, ''), stream?.name].filter(Boolean).join(' · ')}</span>
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-[15px] font-semibold text-gray-900">{formatCurrency(e.amount)}</span>
+                  </button>
+                </li>
+              );
+            })}
+            {filteredExpenses.length === 0 && <li className="py-12 text-center text-sm text-gray-500">No expenses in this period.</li>}
+          </ul>
+        ) : (
+          <ul className="space-y-2">
+            {filteredRecurring.map(r => (
+              <li key={r.id}>
+                <button onClick={() => { setRecData(r); setShowRecModal(true); }} className="w-full text-left bg-white rounded-2xl border border-gray-200 px-4 py-3 flex items-center gap-3 active:bg-gray-50">
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[15px] font-semibold text-gray-900 truncate">{r.name}</span>
+                    <span className="flex items-center gap-1.5 mt-1 text-xs text-gray-500 min-w-0">
+                      {isPaidThisMonthRec(r)
+                        ? <span className="shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700">Paid</span>
+                        : <span className="shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 text-indigo-700">Monthly</span>}
+                      <span className="truncate">Day {r.day_of_month} · {r.category.replace(/^(Fixed|Variable): /, '')}{!r.is_active ? ' · Paused' : ''}</span>
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-[15px] font-semibold text-gray-900">{formatCurrency(r.amount)}</span>
+                </button>
+              </li>
+            ))}
+            {filteredRecurring.length === 0 && <li className="py-12 text-center text-sm text-gray-500">No subscriptions yet.</li>}
+          </ul>
+        )}
+
+        <button
+          onClick={() => { if (mobileTab === 'expenses') { setFormData(initialFormState); setShowModal(true); } else { openNewRecurring(); } }}
+          aria-label={mobileTab === 'expenses' ? 'New expense' : 'New subscription'}
+          className="fixed right-4 bottom-24 z-30 w-14 h-14 rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 flex items-center justify-center"
+        >
+          <Plus size={24} />
+        </button>
+      </div>
+
+      {/* ===== Desktop layout (unchanged) ===== */}
+      <div className="hidden md:flex md:!mt-0 flex-col md:flex-row md:items-center justify-between gap-6">
         <div><h2 className="text-3xl font-extrabold text-gray-900 tracking-tight">Expense Tracker</h2><p className="text-gray-500 font-medium text-sm">Synchronized with range {globalStart} — {globalEnd}</p></div>
         <div className="flex gap-3">
           <button onClick={() => setShowImportModal(true)} className="flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
@@ -141,7 +249,7 @@ const ExpensesView: React.FC<ExpensesViewProps> = ({ globalStart, globalEnd }) =
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+      <div className="hidden md:grid grid-cols-1 lg:grid-cols-3 gap-10">
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-white border border-gray-200 rounded-[32px] shadow-sm overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 flex items-center gap-3"><Search size={16} className="text-gray-400" /><input type="text" placeholder="Search operational burn..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="flex-1 bg-transparent outline-none text-xs font-bold" /></div>
@@ -193,7 +301,10 @@ const ExpensesView: React.FC<ExpensesViewProps> = ({ globalStart, globalEnd }) =
         </div>
       </div>
 
-      <Modal title="Manual Expense Item" isOpen={showModal} onClose={() => setShowModal(false)} onSave={handleSaveExp}>
+      <Modal title="Manual Expense Item" isOpen={showModal} onClose={() => setShowModal(false)} onSave={handleSaveExp}
+        footerExtra={formData.id ? (
+          <button onClick={() => { const id = formData.id as number; setShowModal(false); handleDelete(id); }} className="md:hidden mr-auto -order-1 text-sm font-medium text-rose-600">Delete</button>
+        ) : undefined}>
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-4">
             <div><label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Date</label><input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border-none rounded-2xl text-sm font-bold outline-none shadow-sm focus:ring-2 focus:ring-indigo-100 transition-all" /></div>

@@ -117,6 +117,8 @@ const WithdrawalsView: React.FC = () => {
 
   // Detail modal
   const [detailWithdrawal, setDetailWithdrawal] = useState<Withdrawal | null>(null);
+  const [mobileTab, setMobileTab] = useState<'history' | 'local'>('history');
+  const [showMobileLbeForm, setShowMobileLbeForm] = useState(false);
   const [cancelLoading, setCancelLoading] = useState(false);
 
   // Local bank expenses
@@ -549,8 +551,214 @@ const WithdrawalsView: React.FC = () => {
     );
   }
 
+  // Shared by desktop and mobile layouts
+  const lbeFormBar = (
+    <>
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 mb-4">
+          {/* Row 1: Source toggle */}
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={() => handleSourceChange('recurring')}
+              className={`rounded-xl py-2 px-4 text-sm font-bold transition-colors ${
+                lbeForm.source === 'recurring'
+                  ? 'bg-slate-900 text-white'
+                  : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Recurring
+            </button>
+            <button
+              onClick={() => handleSourceChange('manual')}
+              className={`rounded-xl py-2 px-4 text-sm font-bold transition-colors ${
+                lbeForm.source === 'manual'
+                  ? 'bg-slate-900 text-white'
+                  : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Manual
+            </button>
+          </div>
+
+          {/* Row 2: Fields */}
+          <div className="flex flex-wrap gap-3">
+            {lbeForm.source === 'recurring' ? (
+              <>
+                <select
+                  value={lbeForm.recurring_expense_id}
+                  onChange={e => handleRecurringSelect(e.target.value)}
+                  className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                >
+                  <option value="">Select subscription...</option>
+                  {recurringPlans.map(plan => (
+                    <option key={plan.id} value={String(plan.id)}>
+                      {plan.name} — ${plan.amount}/month
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  value={lbeForm.pkr_amount}
+                  readOnly
+                  className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  placeholder="PKR amount"
+                />
+              </>
+            ) : (
+              <input
+                type="number"
+                value={lbeForm.pkr_amount}
+                onChange={e => setLbeForm(f => ({ ...f, pkr_amount: e.target.value }))}
+                className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                placeholder="PKR amount"
+              />
+            )}
+            <input
+              type="text"
+              placeholder="Note..."
+              value={lbeForm.description}
+              onChange={e => setLbeForm(f => ({ ...f, description: e.target.value }))}
+              className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+            />
+            <select
+              value={lbeForm.bank_id}
+              onChange={e => setLbeForm(f => ({ ...f, bank_id: e.target.value }))}
+              className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
+            >
+              <option value="">Select bank...</option>
+              {localBanks.map(bank => (
+                <option key={bank.id} value={String(bank.id)}>
+                  {bank.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={handleRecordLocalExpense}
+              disabled={lbeLoading}
+              className="bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-800 transition-all disabled:opacity-60 flex items-center gap-2"
+            >
+              {lbeLoading ? <Loader2 size={16} className="animate-spin" /> : null}
+              Record & Deduct
+            </button>
+          </div>
+        </div>
+    </>
+  );
+
+  // Mobile: one bird's-eye card — platforms → US banks → local banks
+  const mobilePlatforms = platformBalances.filter(pb => Math.abs(pb.balance) > 0.005);
+  const mobileTiers = [
+    { step: 1, name: 'Platforms', total: `$${fmt(mobilePlatforms.reduce((sum, pb) => sum + pb.balance, 0))}`, tone: 'bg-indigo-50 text-indigo-700',
+      rows: mobilePlatforms.map(pb => ({ key: `p${pb.stream.id}`, name: pb.stream.name, amount: `$${fmt(pb.balance)}`, dot: pb.balance > 500 ? 'bg-emerald-500' : 'bg-amber-500' })) },
+    { step: 2, name: 'US banks', total: `$${fmt(usBanks.reduce((sum, b) => sum + Number(b.balance), 0))}`, tone: 'bg-emerald-50 text-emerald-700',
+      rows: usBanks.map(b => ({ key: `u${b.id}`, name: `${b.name}${b.account_number ? ` ••${String(b.account_number).slice(-4)}` : ''}`, amount: `$${fmt(Number(b.balance))}`, dot: 'bg-gray-300' })) },
+    { step: 3, name: 'Local banks', total: `PKR ${fmtPKR(localBanks.reduce((sum, b) => sum + Number(b.balance), 0))}`, tone: 'bg-orange-50 text-orange-700',
+      rows: localBanks.map(b => ({ key: `l${b.id}`, name: `${b.name}${b.account_number ? ` ••${String(b.account_number).slice(-4)}` : ''}`, amount: `PKR ${fmtPKR(Number(b.balance))}`, dot: 'bg-gray-300' })) },
+  ];
+  const sortedWithdrawals = [...withdrawals].sort((a, b) => b.date.localeCompare(a.date));
+
   return (
     <div className="space-y-8 pb-16">
+      {/* ===== Mobile layout ===== */}
+      <div className="md:hidden space-y-3 -mt-1">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-[15px] font-semibold text-gray-900">Where your money is</h2>
+          <span className="text-xs text-gray-500">Live balances</span>
+        </div>
+        <section aria-label="Money by location" className="bg-white rounded-2xl border border-gray-200 px-4 divide-y divide-gray-100">
+          {mobileTiers.map(t => (
+            <div key={t.name} className="py-3">
+              <div className="flex items-center gap-2.5">
+                <span className={`w-7 h-7 rounded-lg flex items-center justify-center text-[13px] font-semibold shrink-0 ${t.tone}`}>{t.step}</span>
+                <span className="flex-1 text-xs font-semibold uppercase tracking-wider text-gray-700">{t.name}</span>
+                <span className="text-base font-semibold text-gray-900">{t.total}</span>
+              </div>
+              {t.rows.length > 0 ? (
+                <ul className="pl-[38px] mt-1">
+                  {t.rows.map(r => (
+                    <li key={r.key} className="flex items-center justify-between gap-3 min-h-[32px] text-sm">
+                      <span className="flex items-center gap-2 min-w-0 text-gray-600">
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${r.dot}`} />
+                        <span className="truncate">{r.name}</span>
+                      </span>
+                      <span className="shrink-0 font-medium text-gray-900">{r.amount}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="pl-[38px] mt-1 text-xs text-gray-400">None yet</p>
+              )}
+            </div>
+          ))}
+        </section>
+
+        <div className="flex gap-2">
+          <button onClick={openWithdrawModal} className="flex-1 h-12 rounded-xl bg-indigo-600 text-white text-[15px] font-medium flex items-center justify-center gap-2">
+            <Plus size={18} /> New withdrawal
+          </button>
+          <button onClick={() => setShowAddBank(true)} className="h-12 px-4 rounded-xl bg-white border border-gray-300 text-sm font-medium text-gray-900">+ Bank</button>
+        </div>
+
+        <div role="tablist" className="grid grid-cols-2 gap-1 p-1 bg-gray-100 rounded-xl">
+          {([['history', 'History'], ['local', 'Local costs']] as const).map(([key, label]) => (
+            <button key={key} role="tab" aria-selected={mobileTab === key} onClick={() => setMobileTab(key)}
+              className={`h-10 rounded-lg text-sm font-medium ${mobileTab === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {mobileTab === 'history' ? (
+          <ul className="bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100">
+            {sortedWithdrawals.map(w => (
+              <li key={w.id}>
+                <button onClick={() => setDetailWithdrawal(w)} className="w-full flex items-center gap-3 px-4 py-3 text-left">
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm font-semibold text-gray-900 truncate">{getFromLabel(w)} → {getToLabel(w)}</span>
+                    <span className="flex items-center gap-1.5 text-xs text-gray-500 mt-0.5">
+                      {w.date}
+                      {w.status !== 'completed' && <span className={`px-1.5 rounded text-[10px] font-medium ${w.status === 'pending' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>{w.status === 'pending' ? 'Pending' : 'Cancelled'}</span>}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-right">
+                    <span className={`block text-sm font-semibold ${w.status === 'cancelled' ? 'text-gray-400 line-through' : 'text-gray-900'}`}>${fmt(w.usd_amount)}</span>
+                    {w.local_amount != null && <span className="block text-[11px] text-gray-500">PKR {fmtPKR(w.local_amount)}</span>}
+                  </span>
+                </button>
+              </li>
+            ))}
+            {sortedWithdrawals.length === 0 && <li className="py-12 text-center text-sm text-gray-500">No transactions yet.</li>}
+          </ul>
+        ) : (
+          <div className="space-y-3">
+            {showMobileLbeForm ? (
+              <div className="space-y-2 [&_.flex-wrap>*]:w-full [&_.flex-wrap>*]:min-h-[48px] [&_.flex-wrap>*]:justify-center">
+                {lbeFormBar}
+                <button onClick={() => setShowMobileLbeForm(false)} className="w-full h-10 text-sm font-medium text-gray-600">Hide form</button>
+              </div>
+            ) : (
+              <button onClick={() => setShowMobileLbeForm(true)} className="w-full h-11 rounded-xl border border-dashed border-indigo-300 bg-indigo-50 text-sm font-medium text-indigo-700">+ Record local cost</button>
+            )}
+            <ul className="bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100">
+              {localBankExpenses.map(lbe => (
+                <li key={lbe.id} className="flex items-center gap-3 px-4 py-3">
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm font-semibold text-gray-900 truncate">{lbe.description}</span>
+                    <span className="block text-xs text-gray-500 truncate">{lbe.date} · {banks.find(b => b.id === lbe.bank_id)?.name ?? '—'} · {lbe.source === 'recurring' ? 'Recurring' : 'Manual'}</span>
+                  </span>
+                  <span className="shrink-0 text-right">
+                    <span className="block text-sm font-semibold text-rose-600">−PKR {fmtPKR(lbe.pkr_amount)}</span>
+                    <span className="block text-[11px] text-gray-500">${fmt(lbe.usd_equivalent)}</span>
+                  </span>
+                </li>
+              ))}
+              {localBankExpenses.length === 0 && <li className="py-12 text-center text-sm text-gray-500">No local costs recorded yet.</li>}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* ===== Desktop layout (unchanged) ===== */}
+      <div className="hidden md:block md:!mt-0 space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -717,94 +925,7 @@ const WithdrawalsView: React.FC = () => {
       <section>
         <h3 className="text-sm font-semibold text-slate-500 mb-3">Local Bank Expenses</h3>
 
-        {/* Form bar */}
-        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 mb-4">
-          {/* Row 1: Source toggle */}
-          <div className="flex gap-2 mb-4">
-            <button
-              onClick={() => handleSourceChange('recurring')}
-              className={`rounded-xl py-2 px-4 text-sm font-bold transition-colors ${
-                lbeForm.source === 'recurring'
-                  ? 'bg-slate-900 text-white'
-                  : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              Recurring
-            </button>
-            <button
-              onClick={() => handleSourceChange('manual')}
-              className={`rounded-xl py-2 px-4 text-sm font-bold transition-colors ${
-                lbeForm.source === 'manual'
-                  ? 'bg-slate-900 text-white'
-                  : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              Manual
-            </button>
-          </div>
-
-          {/* Row 2: Fields */}
-          <div className="flex flex-wrap gap-3">
-            {lbeForm.source === 'recurring' ? (
-              <>
-                <select
-                  value={lbeForm.recurring_expense_id}
-                  onChange={e => handleRecurringSelect(e.target.value)}
-                  className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
-                >
-                  <option value="">Select subscription...</option>
-                  {recurringPlans.map(plan => (
-                    <option key={plan.id} value={String(plan.id)}>
-                      {plan.name} — ${plan.amount}/month
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="number"
-                  value={lbeForm.pkr_amount}
-                  readOnly
-                  className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900"
-                  placeholder="PKR amount"
-                />
-              </>
-            ) : (
-              <input
-                type="number"
-                value={lbeForm.pkr_amount}
-                onChange={e => setLbeForm(f => ({ ...f, pkr_amount: e.target.value }))}
-                className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
-                placeholder="PKR amount"
-              />
-            )}
-            <input
-              type="text"
-              placeholder="Note..."
-              value={lbeForm.description}
-              onChange={e => setLbeForm(f => ({ ...f, description: e.target.value }))}
-              className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
-            />
-            <select
-              value={lbeForm.bank_id}
-              onChange={e => setLbeForm(f => ({ ...f, bank_id: e.target.value }))}
-              className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
-            >
-              <option value="">Select bank...</option>
-              {localBanks.map(bank => (
-                <option key={bank.id} value={String(bank.id)}>
-                  {bank.name}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={handleRecordLocalExpense}
-              disabled={lbeLoading}
-              className="bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-800 transition-all disabled:opacity-60 flex items-center gap-2"
-            >
-              {lbeLoading ? <Loader2 size={16} className="animate-spin" /> : null}
-              Record & Deduct
-            </button>
-          </div>
-        </div>
+        {lbeFormBar}
 
         {/* Log table */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
@@ -930,6 +1051,7 @@ const WithdrawalsView: React.FC = () => {
           )}
         </div>
       </section>
+      </div>
 
       {/* ── Withdraw Modal ── */}
       {showWithdrawModal && (

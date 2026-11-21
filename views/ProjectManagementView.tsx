@@ -173,6 +173,15 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
 
   useEffect(() => { setDateError(''); }, [selectedProject]);
 
+  // ---- Mobile state ----
+  const [mobileView, setMobileView] = useState<'list' | 'board'>('list');
+  const [mobileCollapsed, setMobileCollapsed] = useState<Set<string>>(new Set());
+  const [mobileDetailTab, setMobileDetailTab] = useState<'subtasks' | 'checklist' | 'activity'>('subtasks');
+  const [mobileFullEdit, setMobileFullEdit] = useState(false);
+  const [showMobileAdd, setShowMobileAdd] = useState(false);
+  const [mobileAddStatus, setMobileAddStatus] = useState('');
+  useEffect(() => { if (!selectedProject) { setMobileFullEdit(false); setMobileDetailTab('subtasks'); } }, [selectedProject]);
+
   // Status management state
   const [showPipelineModal, setShowPipelineModal] = useState(false);
   const [newPipelineName, setNewPipelineName] = useState('');
@@ -1444,8 +1453,317 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
     return <div className="p-8 text-center text-slate-500">Loading project management...</div>;
   }
 
+  // ---- Mobile helpers (read from the same state the desktop views use) ----
+  const mobileStatusNames = [...statuses.map(st => st.name), 'Uncategorized'];
+  const mobileStatusOf = (p: Project) => {
+    const st = managementData[p.id]?.status || statuses[0]?.name || 'Uncategorized';
+    return mobileStatusNames.includes(st) ? st : 'Uncategorized';
+  };
+  const mobileGroups = mobileStatusNames
+    .map(name => ({ name, items: projects.filter(p => mobileStatusOf(p) === name) }))
+    .filter(g => g.items.length > 0 || g.name !== 'Uncategorized');
+  const mobileAssignees = (projectId: number) => allocations
+    .filter(a => a.project_id === projectId)
+    .map(a => teamMembers.find(m => m.id === a.team_member_id))
+    .filter((m): m is TeamMember => !!m);
+  const mobileInitials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]?.toUpperCase()).join('');
+  const mobileFmtDate = (d?: string) => {
+    if (!d) return '';
+    const dt = new Date(d.slice(0, 10) + 'T00:00:00');
+    return isNaN(dt.getTime()) ? d : dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+  const MOBILE_DOT: Record<string, string> = {
+    slate: 'bg-slate-400', gray: 'bg-gray-400', zinc: 'bg-zinc-400', red: 'bg-red-500', rose: 'bg-rose-500', orange: 'bg-orange-500',
+    amber: 'bg-amber-500', yellow: 'bg-yellow-500', lime: 'bg-lime-500', green: 'bg-green-500', emerald: 'bg-emerald-500', teal: 'bg-teal-500',
+    cyan: 'bg-cyan-500', sky: 'bg-sky-500', blue: 'bg-blue-500', indigo: 'bg-indigo-500', violet: 'bg-violet-500', purple: 'bg-purple-500',
+    fuchsia: 'bg-fuchsia-500', pink: 'bg-pink-500',
+  };
+  const mobileDot = (statusName: string) => {
+    const hue = getStatusColor(statusName).match(/(?:text|bg)-([a-z]+)-\d+/)?.[1];
+    return (hue && MOBILE_DOT[hue]) || 'bg-slate-400';
+  };
+  const toggleMobileChecklist = (projectId: number, itemId: string) => {
+    const cur = managementData[projectId] || editData;
+    const list = (cur.compliance_checklist || editData.compliance_checklist || []).map((c: ChecklistItem) => c.id === itemId ? { ...c, completed: !c.completed } : c);
+    const updated = { ...cur, compliance_checklist: list };
+    setManagementData(prev => ({ ...prev, [projectId]: updated }));
+    setEditData(prev => ({ ...prev, compliance_checklist: list }));
+    saveManagementData(projectId, updated);
+  };
+  const stripHtml = (html?: string) => (html || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const renderMobileCard = (project: Project, compact = false) => {
+    const md = managementData[project.id];
+    const subs = md?.subtasks || [];
+    const done = subs.filter(st => st.completed).length;
+    const people = mobileAssignees(project.id);
+    return (
+      <button
+        key={project.id}
+        onClick={() => openEditModal(project)}
+        className={`w-full text-left bg-white rounded-xl ${compact ? '' : 'border border-gray-200'} p-3.5 space-y-2 active:bg-gray-50`}
+      >
+        <span className="block text-[15px] font-semibold text-gray-900 leading-snug line-clamp-2">{project.project_name}</span>
+        <span className="flex items-center justify-between gap-2 text-xs text-gray-500">
+          <span className="flex items-center gap-1.5 min-w-0">
+            {people.length > 0 ? (
+              <span className="flex -space-x-1.5 shrink-0">
+                {people.slice(0, 3).map(m => (
+                  <span key={m.id} title={m.name} className="w-6 h-6 rounded-full bg-indigo-50 text-indigo-700 ring-2 ring-white text-[10px] font-semibold flex items-center justify-center">{mobileInitials(m.name)}</span>
+                ))}
+              </span>
+            ) : <span className="text-gray-400">Unassigned</span>}
+            {md?.due_date && <span className="truncate">Due {mobileFmtDate(md.due_date)}</span>}
+          </span>
+          {subs.length > 0 && <span className="shrink-0">{done}/{subs.length} subtasks</span>}
+        </span>
+      </button>
+    );
+  };
+
+  const mobileDetailProject = selectedProject;
+  const mobileDetailMd = mobileDetailProject ? (managementData[mobileDetailProject.id] || editData) : null;
+  const mobileSubs: Subtask[] = mobileDetailProject ? (editData.subtasks || []) : [];
+  const mobileChecklist: ChecklistItem[] = mobileDetailProject ? (editData.compliance_checklist || []) : [];
+  const mobileActivities = mobileDetailProject ? activities.filter(a => a.project_id === mobileDetailProject.id) : [];
+  const mobileDoneCount = mobileSubs.filter(st => st.completed).length;
+
   return (
     <div className="space-y-4 max-w-[1600px] mx-auto w-full font-manrope relative pb-16">
+      {/* ===== Mobile layout ===== */}
+      <div className="md:hidden space-y-3 -mt-1 font-sans">
+        <div className="space-y-1.5">
+          <div role="tablist" className="grid grid-cols-2 gap-1 p-1 bg-gray-100 rounded-xl">
+            {([['list', 'List'], ['board', 'Board']] as const).map(([key, label]) => (
+              <button key={key} role="tab" aria-selected={mobileView === key} onClick={() => setMobileView(key)}
+                className={`h-10 rounded-lg text-sm font-medium ${mobileView === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-gray-500">Gantt and Calendar views stay on desktop.</p>
+        </div>
+
+        {mobileView === 'list' ? (
+          <div className="space-y-4">
+            {mobileGroups.filter(g => g.items.length > 0).map(g => {
+              const open = !mobileCollapsed.has(g.name);
+              return (
+                <section key={g.name} className="space-y-2">
+                  <button
+                    onClick={() => setMobileCollapsed(prev => { const n = new Set(prev); if (n.has(g.name)) n.delete(g.name); else n.add(g.name); return n; })}
+                    aria-expanded={open}
+                    className="w-full h-9 flex items-center gap-2 text-left"
+                  >
+                    <span className={`w-2.5 h-2.5 rounded-full ${mobileDot(g.name)}`} />
+                    <span className="text-sm font-semibold text-gray-900">{g.name}</span>
+                    <span className="text-xs text-gray-500">{g.items.length}</span>
+                    <ChevronDown size={16} className={`ml-auto text-gray-400 transition-transform ${open ? '' : '-rotate-90'}`} />
+                  </button>
+                  {open && (
+                    <div className="space-y-2">
+                      {g.items.map(p => renderMobileCard(p))}
+                      {g.items.length === 0 && <p className="text-xs text-gray-400 pl-4">No projects</p>}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="flex gap-2.5 overflow-x-auto -mx-4 px-4 pb-2 snap-x">
+            {mobileGroups.map(g => (
+              <section key={g.name} className="shrink-0 w-[280px] snap-start bg-gray-100 rounded-2xl p-2.5 space-y-2 self-start">
+                <div className="flex items-center gap-2 px-1 h-7">
+                  <span className={`w-2.5 h-2.5 rounded-full ${mobileDot(g.name)}`} />
+                  <span className="text-sm font-semibold text-gray-900 truncate">{g.name}</span>
+                  <span className="text-xs text-gray-500">{g.items.length}</span>
+                </div>
+                {g.items.map(p => renderMobileCard(p, true))}
+                {g.items.length === 0 && <p className="text-xs text-gray-400 px-1 pb-1">No projects</p>}
+              </section>
+            ))}
+          </div>
+        )}
+
+        <button
+          onClick={() => { setNewProjectName(''); setMobileAddStatus(statuses[0]?.name || 'Uncategorized'); setShowMobileAdd(true); }}
+          aria-label="Add project"
+          className="fixed right-4 bottom-24 z-30 w-14 h-14 rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 flex items-center justify-center"
+        >
+          <Plus size={24} />
+        </button>
+
+        <Modal
+          title="New project"
+          isOpen={showMobileAdd}
+          onClose={() => setShowMobileAdd(false)}
+          onSave={async () => { if (!newProjectName.trim()) return; await handleAddProject(mobileAddStatus); setShowMobileAdd(false); }}
+          saveLabel="Create"
+        >
+          <label className="block space-y-1.5">
+            <span className="text-[13px] font-medium text-gray-700">Project name</span>
+            <input autoFocus value={newProjectName} onChange={e => setNewProjectName(e.target.value)} placeholder="Enter project name..." className="w-full h-12 px-3 rounded-xl border border-gray-300 text-[15px] outline-none focus:ring-2 focus:ring-indigo-100" />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-[13px] font-medium text-gray-700">Status</span>
+            <select value={mobileAddStatus} onChange={e => setMobileAddStatus(e.target.value)} className="w-full h-12 px-3 rounded-xl border border-gray-300 text-[15px] bg-white">
+              {mobileStatusNames.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+        </Modal>
+      </div>
+
+      {/* ===== Mobile project detail ===== */}
+      {mobileDetailProject && !mobileFullEdit && (
+        <div className="md:hidden fixed inset-0 z-[35] bg-[#f3f4f6] flex flex-col font-sans" role="dialog" aria-modal="true" aria-label={mobileDetailProject.project_name}>
+          <header className="h-14 shrink-0 bg-white border-b border-gray-200 px-1.5 flex items-center justify-between">
+            <button onClick={() => setSelectedProject(null)} className="h-11 px-2 flex items-center gap-0.5 text-[15px] font-medium text-indigo-600">
+              <ChevronLeft size={22} /> Project Mgmt
+            </button>
+            <button onClick={() => setMobileFullEdit(true)} className="h-11 px-3 text-[15px] font-medium text-indigo-600">Edit</button>
+          </header>
+          <div className="flex-1 overflow-y-auto px-4 pt-4 pb-28 space-y-3">
+            <h1 className="text-xl font-semibold leading-snug tracking-tight text-gray-900">{mobileDetailProject.project_name}</h1>
+
+            <div className="flex flex-wrap gap-2">
+              <label className={`relative h-9 pl-3 pr-8 rounded-full flex items-center gap-2 text-[13px] font-medium ${getStatusColor(editData.status)}`}>
+                <span className="sr-only">Status</span>
+                {editData.status}
+                <ChevronDown size={14} className="absolute right-2.5 pointer-events-none" />
+                <select
+                  value={editData.status}
+                  onChange={e => { const v = e.target.value; setEditData(prev => ({ ...prev, status: v })); handleStatusChange(mobileDetailProject.id, v); }}
+                  className="absolute inset-0 opacity-0 w-full"
+                >
+                  {mobileStatusNames.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+              <label className={`relative h-9 pl-3 pr-8 rounded-full flex items-center text-[13px] font-medium capitalize ${editData.priority === 'high' ? 'bg-rose-50 text-rose-700' : editData.priority === 'low' ? 'bg-gray-100 text-gray-700' : 'bg-amber-50 text-amber-800'}`}>
+                <span className="sr-only">Priority</span>
+                {editData.priority} priority
+                <ChevronDown size={14} className="absolute right-2.5 pointer-events-none" />
+                <select
+                  value={editData.priority}
+                  onChange={e => { const v = e.target.value; setEditData(prev => ({ ...prev, priority: v })); handlePriorityChange(mobileDetailProject.id, v); }}
+                  className="absolute inset-0 opacity-0 w-full"
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+            </div>
+
+            <section className="bg-white rounded-2xl border border-gray-200 px-4 divide-y divide-gray-100">
+              <div className="flex items-center justify-between min-h-[44px] gap-3">
+                <span className="text-[13px] text-gray-500">Assignees</span>
+                <span className="flex items-center gap-1.5 min-w-0">
+                  {mobileAssignees(mobileDetailProject.id).length === 0 ? <span className="text-sm text-gray-400">Unassigned</span> : (
+                    <span className="flex -space-x-1.5">
+                      {mobileAssignees(mobileDetailProject.id).slice(0, 5).map(m => (
+                        <span key={m.id} title={m.name} className="w-7 h-7 rounded-full bg-indigo-50 text-indigo-700 ring-2 ring-white text-[11px] font-semibold flex items-center justify-center">{mobileInitials(m.name)}</span>
+                      ))}
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center justify-between min-h-[44px] gap-3">
+                <span className="text-[13px] text-gray-500">Start → Due</span>
+                <span className="text-sm font-medium text-gray-900">{mobileFmtDate(editData.start_date) || '—'} → {mobileFmtDate(editData.due_date) || '—'}</span>
+              </div>
+              <div className="flex items-center justify-between min-h-[44px] gap-3">
+                <span className="text-[13px] text-gray-500">Income stream</span>
+                <span className="text-sm font-medium text-gray-900 truncate">{incomeStreams.find(st => st.id === (editData.pipeline_stage_id ?? mobileDetailProject.income_stream_id))?.name || '—'}</span>
+              </div>
+            </section>
+
+            <div className="grid grid-cols-3 gap-2">
+              {mobileDetailProject.drive_folder_url ? (
+                <a href={mobileDetailProject.drive_folder_url} target="_blank" rel="noopener noreferrer" className="h-16 rounded-xl border border-gray-200 bg-white flex flex-col items-center justify-center gap-1 text-xs font-medium text-gray-900">
+                  <FolderOpen size={20} className="text-indigo-600" /> Drive
+                </a>
+              ) : (
+                <span className="h-16 rounded-xl border border-gray-200 bg-white flex flex-col items-center justify-center gap-1 text-xs font-medium text-gray-400"><FolderOpen size={20} /> No Drive</span>
+              )}
+              {mobileDetailProject.project_brief_doc_id ? (
+                <a href={`https://docs.google.com/document/d/${mobileDetailProject.project_brief_doc_id}/edit`} target="_blank" rel="noopener noreferrer" className="h-16 rounded-xl border border-gray-200 bg-white flex flex-col items-center justify-center gap-1 text-xs font-medium text-gray-900">
+                  <ArrowUpRight size={20} className="text-indigo-600" /> Brief
+                </a>
+              ) : (
+                <span className="h-16 rounded-xl border border-gray-200 bg-white flex flex-col items-center justify-center gap-1 text-xs font-medium text-gray-400"><ArrowUpRight size={20} /> No brief</span>
+              )}
+              <button
+                onClick={() => handleGenerateBrief(mobileDetailProject)}
+                disabled={briefGenerating.has(mobileDetailProject.id)}
+                className="h-16 rounded-xl bg-indigo-600 text-white flex flex-col items-center justify-center gap-1 text-xs font-medium disabled:opacity-60"
+              >
+                <Rocket size={20} /> {briefGenerating.has(mobileDetailProject.id) ? 'Generating…' : 'Generate brief'}
+              </button>
+            </div>
+
+            {mobileSubs.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-xs font-medium text-gray-700"><span>Project progress</span><span>{mobileDoneCount}/{mobileSubs.length} subtasks</span></div>
+                <div className="h-2 rounded-full bg-gray-200 overflow-hidden"><div className="h-full bg-indigo-600 rounded-full" style={{ width: `${(mobileDoneCount / mobileSubs.length) * 100}%` }} /></div>
+              </div>
+            )}
+
+            {editData.description && stripHtml(editData.description) && (
+              <p className="text-sm text-gray-700 leading-relaxed bg-white rounded-2xl border border-gray-200 p-4 whitespace-pre-line">{stripHtml(editData.description)}</p>
+            )}
+
+            <div role="tablist" className="grid grid-cols-3 gap-1 p-1 bg-gray-200/70 rounded-xl">
+              {([['subtasks', 'Subtasks'], ['checklist', 'Checklist'], ['activity', 'Activity']] as const).map(([key, label]) => (
+                <button key={key} role="tab" aria-selected={mobileDetailTab === key} onClick={() => setMobileDetailTab(key)}
+                  className={`h-10 rounded-lg text-[13px] font-medium ${mobileDetailTab === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <ul className="bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100">
+              {mobileDetailTab === 'subtasks' && mobileSubs.map(st => {
+                const who = st.assignee_id ? teamMembers.find(m => String(m.id) === String(st.assignee_id))?.name : '';
+                return (
+                  <li key={st.id} className="flex items-center gap-1 pr-3 min-h-[52px]">
+                    <button role="checkbox" aria-checked={st.completed} aria-label={`Mark ${st.title} done`} onClick={() => updateSubtask(mobileDetailProject.id, st.id, { completed: !st.completed })} className="w-11 h-11 shrink-0 flex items-center justify-center">
+                      <span className={`w-5 h-5 rounded-md border-2 flex items-center justify-center ${st.completed ? 'bg-indigo-600 border-indigo-600' : 'border-gray-400'}`}>{st.completed && <Check size={12} className="text-white" strokeWidth={3.5} />}</span>
+                    </button>
+                    <span className="flex-1 min-w-0 py-2">
+                      <span className={`block text-sm ${st.completed ? 'text-gray-400 line-through' : 'text-gray-900'}`}>{st.title}</span>
+                      {(who || st.due_date) && <span className="block text-xs text-gray-500">{[who, st.due_date ? `Due ${mobileFmtDate(st.due_date)}` : ''].filter(Boolean).join(' · ')}</span>}
+                    </span>
+                  </li>
+                );
+              })}
+              {mobileDetailTab === 'subtasks' && mobileSubs.length === 0 && <li className="py-8 text-center text-sm text-gray-500">No subtasks. Add them with Edit.</li>}
+
+              {mobileDetailTab === 'checklist' && mobileChecklist.map(c => (
+                <li key={c.id} className="flex items-center gap-1 pr-3 min-h-[52px]">
+                  <button role="checkbox" aria-checked={c.completed} aria-label={`Mark ${c.title} done`} onClick={() => toggleMobileChecklist(mobileDetailProject.id, c.id)} className="w-11 h-11 shrink-0 flex items-center justify-center">
+                    <span className={`w-5 h-5 rounded-md border-2 flex items-center justify-center ${c.completed ? 'bg-indigo-600 border-indigo-600' : 'border-gray-400'}`}>{c.completed && <Check size={12} className="text-white" strokeWidth={3.5} />}</span>
+                  </button>
+                  <span className={`flex-1 text-sm ${c.completed ? 'text-gray-400 line-through' : 'text-gray-900'}`}>{c.title}</span>
+                </li>
+              ))}
+              {mobileDetailTab === 'checklist' && mobileChecklist.length === 0 && <li className="py-8 text-center text-sm text-gray-500">No checklist items.</li>}
+
+              {mobileDetailTab === 'activity' && mobileActivities.slice(0, 30).map(a => (
+                <li key={a.id} className="px-4 py-3">
+                  <p className="text-sm text-gray-900"><span className="font-medium">{a.user_name}</span> {a.action}</p>
+                  {a.content && <p className="text-[13px] text-gray-600 mt-0.5 line-clamp-3">{stripHtml(a.content)}</p>}
+                  <p className="text-[11px] text-gray-400 mt-1">{new Date(a.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>
+                </li>
+              ))}
+              {mobileDetailTab === 'activity' && mobileActivities.length === 0 && <li className="py-8 text-center text-sm text-gray-500">No activity yet.</li>}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Desktop layout (unchanged) ===== */}
+      <div className="hidden md:block md:!mt-0 space-y-4">
       {/* View Switcher */}
       <div className="flex items-center gap-6 border-b border-slate-200 mb-4">
         <button
@@ -2637,6 +2955,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
           </div>
         );
       })()}
+      </div>
 
       {/* Brief error toast */}
       {briefToast && (
@@ -2648,13 +2967,22 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
 
       {/* Custom Edit Modal */}
       {selectedProject && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+        <div className={`fixed inset-0 z-[100] ${mobileFullEdit ? 'flex' : 'hidden'} md:flex items-center justify-center`}>
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedProject(null)} />
 
-          <div className="relative bg-white rounded-2xl shadow-2xl flex overflow-hidden border border-slate-100" style={{ width: '90vw', maxWidth: '1200px', height: '90vh' }}>
+          <div className="relative bg-white rounded-2xl shadow-2xl flex overflow-hidden border border-slate-100 max-md:!w-screen max-md:!max-w-none max-md:!h-[100dvh] max-md:!rounded-none" style={{ width: '90vw', maxWidth: '1200px', height: '90vh' }}>
 
             {/* Left Panel - Project Details */}
-            <div className="overflow-y-auto scrollbar-hide flex-shrink-0" style={{ width: `${dividerPct}%`, padding: '32px' }}>
+            <div className="overflow-y-auto scrollbar-hide flex-shrink-0 max-md:!w-full max-md:!p-5" style={{ width: `${dividerPct}%`, padding: '32px' }}>
+              {/* Phone only: way back to the project screen (the desktop close button lives in the hidden activity panel) */}
+              <div className="md:hidden sticky -top-5 z-10 -mx-5 -mt-5 mb-4 h-14 px-1.5 bg-white border-b border-slate-200 flex items-center justify-between">
+                <button onClick={() => setMobileFullEdit(false)} className="h-11 px-2 flex items-center gap-0.5 text-[15px] font-medium text-indigo-600">
+                  <ChevronLeft size={22} /> Back
+                </button>
+                <button onClick={async () => { await handleSaveManagementData(); }} disabled={isSavingMgmt} className="h-11 px-3 text-[15px] font-semibold text-indigo-600 disabled:opacity-50">
+                  {isSavingMgmt ? 'Saving…' : 'Save'}
+                </button>
+              </div>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
 
                 {/* Header */}
@@ -3222,7 +3550,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
 
             {/* Draggable divider */}
             <div
-              className="cursor-col-resize bg-slate-200 hover:bg-blue-400 active:bg-blue-500 transition-colors shrink-0"
+              className="cursor-col-resize bg-slate-200 hover:bg-blue-400 active:bg-blue-500 transition-colors shrink-0 max-md:hidden"
               style={{ width: '4px' }}
               onMouseDown={(e) => {
                 e.preventDefault();
@@ -3245,7 +3573,7 @@ const ProjectManagementView: React.FC<ProjectManagementViewProps> = ({ globalSta
             />
 
             {/* Right Panel - Activity Feed */}
-            <div className="bg-slate-50 flex flex-col" style={{ width: `${100 - dividerPct}%`, minWidth: 0 }}>
+            <div className="bg-slate-50 flex flex-col max-md:hidden" style={{ width: `${100 - dividerPct}%`, minWidth: 0 }}>
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 bg-white shrink-0">
                 <div className="flex items-center gap-2 text-slate-900 font-semibold text-sm">

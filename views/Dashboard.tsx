@@ -23,9 +23,12 @@ import {
 interface DashboardProps {
   startDate: string;
   endDate: string;
+  /** Optional: lets the mobile layout jump to another page. Visibility is decided by App (isTabVisible). */
+  onNavigate?: (tab: string) => void;
+  canOpen?: (tab: string) => boolean;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ startDate, endDate }) => {
+const Dashboard: React.FC<DashboardProps> = ({ startDate, endDate, onNavigate, canOpen }) => {
   const [data, setData] = useState<{
     revenues: Revenue[]; streams: IncomeStream[]; expenses: Expense[]; payments: ProductionPayment[];
     projects: Project[]; allocations: ProjectAllocation[]; members: TeamMember[];
@@ -115,11 +118,101 @@ const Dashboard: React.FC<DashboardProps> = ({ startDate, endDate }) => {
     </div>
   );
 
+  const mobileTiles: { label: string; value: number; tone: 'green' | 'red' | 'plain'; tab: string }[] = [
+    { label: 'Gross revenue', value: stats.totalGross, tone: 'green', tab: 'revenue' },
+    { label: 'Planned production', value: stats.plannedProductionCost, tone: 'plain', tab: 'projects' },
+    { label: 'Actual production', value: stats.totalDev, tone: 'red', tab: 'payments' },
+    { label: 'Platform fees', value: stats.totalFees, tone: 'red', tab: 'incomeStreams' },
+    { label: 'Regular expenses', value: stats.totalOpEx + stats.totalRec, tone: 'red', tab: 'expenses' },
+    { label: 'Other paid items', value: stats.totalOtherPaid, tone: 'red', tab: 'payments' },
+  ];
+  const canGo = (tab: string) => !!onNavigate && (!canOpen || canOpen(tab));
+  const costsOut = stats.totalGross - stats.retainedProfit;
+  const quickActions = [
+    { label: 'Revenue', tab: 'revenue', primary: true },
+    { label: 'Expense', tab: 'expenses', primary: false },
+    { label: 'Payment', tab: 'payments', primary: false },
+  ].filter(a => canGo(a.tab));
+
   return (
     <div className="space-y-6 animate-in fade-in duration-700 pb-20">
-      
+
+      {/* ===== Mobile layout ===== */}
+      <div className="md:hidden space-y-4 -mt-1">
+        <section className="bg-white rounded-2xl border border-gray-200 p-5 space-y-3.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium uppercase tracking-wider text-gray-500">Net profit</span>
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${stats.retainedProfit >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+              {stats.retainedProfit >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+              {stats.retainedProfit >= 0 ? 'Profit' : 'Loss'}
+            </span>
+          </div>
+          <p className={`text-[34px] leading-none font-semibold tracking-tight ${stats.retainedProfit >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>{formatCurrency(stats.retainedProfit)}</p>
+          <div className="grid grid-cols-2 gap-2.5 pt-3.5 border-t border-gray-100">
+            <div>
+              <p className="text-xs text-gray-500">Revenue in</p>
+              <p className="text-base font-semibold text-gray-900">{formatCurrency(stats.totalGross)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Costs out</p>
+              <p className="text-base font-semibold text-gray-900">{formatCurrency(costsOut)}</p>
+            </div>
+          </div>
+        </section>
+
+        {quickActions.length > 0 && (
+          <div className="flex gap-2">
+            {quickActions.map(a => (
+              <button
+                key={a.tab}
+                onClick={() => onNavigate?.(a.tab)}
+                className={`flex-1 h-11 rounded-xl text-sm font-medium flex items-center justify-center gap-1.5 ${a.primary ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-900'}`}
+              >
+                <span aria-hidden="true" className="text-base leading-none">+</span> {a.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-[15px] font-semibold text-gray-900">Breakdown</h2>
+          {onNavigate && <span className="text-xs text-gray-500">Tap a tile for details</span>}
+        </div>
+        <div className="grid grid-cols-2 gap-2.5">
+          {mobileTiles.map(t => {
+            const color = t.tone === 'green' ? 'text-emerald-700' : t.tone === 'red' ? 'text-rose-600' : 'text-gray-900';
+            const inner = (
+              <>
+                <span className="block text-xs text-gray-500">{t.label}</span>
+                <span className={`block text-[17px] font-semibold mt-1 ${color}`}>{formatCurrency(t.value)}</span>
+              </>
+            );
+            return canGo(t.tab) ? (
+              <button key={t.label} onClick={() => onNavigate?.(t.tab)} className="text-left bg-white rounded-2xl border border-gray-200 p-3.5 min-h-[76px] active:bg-gray-50">{inner}</button>
+            ) : (
+              <div key={t.label} className="bg-white rounded-2xl border border-gray-200 p-3.5 min-h-[76px]">{inner}</div>
+            );
+          })}
+        </div>
+
+        {Object.keys(stats.partnerTotals).length > 0 && (
+          <section className="bg-white rounded-2xl border border-gray-200 px-4 py-1">
+            <h2 className="text-xs font-medium uppercase tracking-wider text-gray-500 pt-3 pb-1">Partner payouts</h2>
+            <ul className="divide-y divide-gray-100">
+              {Object.entries(stats.partnerTotals).map(([name, amount]) => (
+                <li key={name} className="flex items-center justify-between py-3">
+                  <span className="text-sm text-gray-700">{name}</span>
+                  <span className="text-sm font-semibold text-rose-600">{formatCurrency(amount as number)}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </div>
+
+      {/* ===== Desktop layout (unchanged) ===== */}
       {/* Hero Section: Net Profit */}
-      <div className="bg-white rounded-[32px] p-12 text-center border border-gray-200 shadow-sm relative overflow-hidden">
+      <div className="hidden md:block md:!mt-0 bg-white rounded-[32px] p-12 text-center border border-gray-200 shadow-sm relative overflow-hidden">
         <div className="relative z-10">
           <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Net Profit</p>
           <h1 className={`text-6xl md:text-8xl font-black tracking-tighter mb-8 ${stats.retainedProfit >= 0 ? 'text-[#047857]' : 'text-rose-600'}`}>
@@ -134,7 +227,7 @@ const Dashboard: React.FC<DashboardProps> = ({ startDate, endDate }) => {
       </div>
 
       {/* Main Metrics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="hidden md:grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         
         <DashboardCard 
           title="Total Gross Revenue"
@@ -190,7 +283,7 @@ const Dashboard: React.FC<DashboardProps> = ({ startDate, endDate }) => {
       </div>
 
       {/* Partner Breakdown Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="hidden md:grid grid-cols-1 md:grid-cols-2 gap-6">
         {Object.entries(stats.partnerTotals).map(([name, amount]) => (
           <div key={name} className="bg-white rounded-[24px] border border-gray-200 p-8 flex justify-between items-center shadow-sm">
             <div>
