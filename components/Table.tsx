@@ -78,9 +78,73 @@ function Table<T>({
     );
   }
 
+  // Mobile card layout: pick a title column, an amount column and an actions column by header name.
+  // Works for every table in the app without per-view configuration.
+  const headerOf = (c: Column<T>) => (c.header || '').toUpperCase();
+  const actionsIdx = columns.findIndex(c => /ACTION/.test(headerOf(c)));
+  const titleIdx = (() => {
+    const i = columns.findIndex((c, idx) => idx !== actionsIdx && /PROJECT NAME|CLIENT|RECIPIENT|DESCRIPTION|NAME|PROJECT|MEMBER/.test(headerOf(c)));
+    return i >= 0 ? i : (columns.length > 1 ? 1 : 0);
+  })();
+  const amountIdx = columns.findIndex((c, idx) => idx !== titleIdx && idx !== actionsIdx && /VALUE|GROSS|AMOUNT|TOTAL|ALLOCATION/.test(headerOf(c)));
+  const detailCols = columns
+    .map((c, idx) => ({ c, idx }))
+    .filter(({ idx }) => idx !== titleIdx && idx !== amountIdx && idx !== actionsIdx);
+  const renderCell = (col: Column<T>, row: T) => col.render ? col.render(row) : String(row[col.accessor as keyof T] || '');
+
   return (
     <div className="w-full bg-white rounded-[24px] overflow-hidden">
-      <div className="overflow-x-auto">
+      {/* Mobile: cards */}
+      <ul className="md:hidden divide-y divide-gray-100">
+        {sortedData.map((row) => {
+          const id = rowKey(row);
+          const isSelected = selectedIds.includes(id);
+          return (
+            <li
+              key={id}
+              className={`flex gap-3 px-4 py-4 ${onRowClick ? 'cursor-pointer active:bg-gray-50' : ''} ${isSelected ? 'bg-gray-50' : ''}`}
+              onClick={(e) => {
+                const target = e.target as HTMLElement;
+                if (target.tagName !== 'INPUT' && target.tagName !== 'BUTTON' && !target.closest('button') && !target.closest('a')) {
+                  onRowClick?.(row);
+                }
+              }}
+            >
+              {selectable && (
+                <input
+                  type="checkbox"
+                  aria-label="Select row"
+                  className="w-5 h-5 mt-0.5 shrink-0 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                  checked={isSelected}
+                  onChange={() => handleSelectRow(id)}
+                />
+              )}
+              <div className="flex-1 min-w-0 space-y-2.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 text-[15px] leading-snug break-words">{renderCell(columns[titleIdx], row)}</div>
+                  {amountIdx >= 0 && <div className="shrink-0 text-right text-[15px]">{renderCell(columns[amountIdx], row)}</div>}
+                </div>
+                {detailCols.length > 0 && (
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
+                    {detailCols.map(({ c, idx }) => (
+                      <div key={idx} className="min-w-0">
+                        <dt className="text-[10px] font-medium uppercase tracking-wider text-gray-500">{c.header}</dt>
+                        <dd className="text-[13px] text-gray-900 break-words [&_*]:text-left">{renderCell(c, row)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+                {actionsIdx >= 0 && (
+                  <div className="flex justify-end -mr-2 -mb-1">{renderCell(columns[actionsIdx], row)}</div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      {/* Desktop: table (unchanged) */}
+      <div className="hidden md:block overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50/30">

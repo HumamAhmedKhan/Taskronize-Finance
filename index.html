@@ -83,6 +83,16 @@
       @media print {
         .no-print { display: none !important; }
       }
+      /* Mobile only: calmer type. Desktop is untouched. */
+      @media (max-width: 767px) {
+        body .font-black, body .font-extrabold { font-weight: 600; }
+        body .font-bold { font-weight: 600; }
+        body .tracking-tighter { letter-spacing: -0.01em; }
+        body .text-3xl { font-size: 1.375rem; line-height: 1.85rem; }
+        body .text-4xl { font-size: 1.625rem; line-height: 2.1rem; }
+        body .text-5xl { font-size: 1.875rem; line-height: 2.3rem; }
+        body .text-6xl, body .text-7xl, body .text-8xl { font-size: 2.125rem; line-height: 2.5rem; }
+      }
     </style>
   <script type="importmap">
 {

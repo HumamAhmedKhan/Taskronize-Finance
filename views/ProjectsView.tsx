@@ -335,48 +335,48 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
   }, [formLinks, revenues]);
 
   return (
-    <div className="space-y-8 pb-32 animate-in fade-in">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white rounded-3xl border border-gray-100 p-8 shadow-sm flex justify-between items-center relative overflow-hidden">
+    <div className="space-y-4 md:space-y-8 pb-32 animate-in fade-in">
+      <div className="grid grid-cols-3 gap-2 md:gap-6">
+        <div className="bg-white rounded-2xl md:rounded-3xl border border-gray-100 p-3 md:p-8 shadow-sm flex justify-between items-center relative overflow-hidden min-w-0">
           <div>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Total Pipeline Value</p>
-            <h3 className="text-3xl font-black text-gray-900 tracking-tighter">{formatCurrency(pipelineStats.totalValue)}</h3>
-            <p className="text-[10px] font-bold text-gray-500 mt-2 uppercase">{projects.length} PROJECTS ACTIVE</p>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider md:tracking-widest mb-1 leading-tight"><span className="md:hidden">Pipeline</span><span className="hidden md:inline">Total Pipeline Value</span></p>
+            <h3 className="text-base md:text-3xl font-black text-gray-900 tracking-tighter truncate">{formatCurrency(pipelineStats.totalValue)}</h3>
+            <p className="hidden md:block text-[10px] font-bold text-gray-500 mt-2 uppercase">{projects.length} PROJECTS ACTIVE</p>
           </div>
-          <div className="w-16 h-16 bg-gray-50 rounded-2xl flex items-center justify-center text-gray-200"><Layers size={32} /></div>
+          <div className="hidden md:flex w-16 h-16 bg-gray-50 rounded-2xl items-center justify-center text-gray-200"><Layers size={32} /></div>
         </div>
-        <div className="bg-white rounded-3xl border border-gray-100 p-8 shadow-sm flex justify-between items-center relative overflow-hidden">
+        <div className="bg-white rounded-2xl md:rounded-3xl border border-gray-100 p-3 md:p-8 shadow-sm flex justify-between items-center relative overflow-hidden min-w-0">
           <div>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Realized Revenue</p>
-            <h3 className="text-3xl font-black text-emerald-600 tracking-tighter">{formatCurrency(pipelineStats.realizedValue)}</h3>
-            <p className="text-[10px] font-bold text-emerald-500 mt-2 uppercase">{pipelineStats.settledCount} PROJECTS SETTLED</p>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider md:tracking-widest mb-1 leading-tight"><span className="md:hidden">Realized</span><span className="hidden md:inline">Realized Revenue</span></p>
+            <h3 className="text-base md:text-3xl font-black text-emerald-600 tracking-tighter truncate">{formatCurrency(pipelineStats.realizedValue)}</h3>
+            <p className="hidden md:block text-[10px] font-bold text-emerald-500 mt-2 uppercase">{pipelineStats.settledCount} PROJECTS SETTLED</p>
           </div>
-          <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-500/20"><CheckCircle2 size={32} /></div>
+          <div className="hidden md:flex w-16 h-16 bg-emerald-50 rounded-full items-center justify-center text-emerald-500/20"><CheckCircle2 size={32} /></div>
         </div>
-        <div className="bg-white rounded-3xl border border-gray-100 p-8 shadow-sm flex justify-between items-center relative overflow-hidden">
+        <div className="bg-white rounded-2xl md:rounded-3xl border border-gray-100 p-3 md:p-8 shadow-sm flex justify-between items-center relative overflow-hidden min-w-0">
           <div>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Realization Rate</p>
-            <h3 className="text-3xl font-black text-orange-600 tracking-tighter">{pipelineStats.realizationRate.toFixed(1)}%</h3>
-            <p className="text-[10px] font-bold text-orange-500 mt-2 uppercase">OVERALL EFFICIENCY</p>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider md:tracking-widest mb-1 leading-tight"><span className="md:hidden">Rate</span><span className="hidden md:inline">Realization Rate</span></p>
+            <h3 className="text-base md:text-3xl font-black text-orange-600 tracking-tighter truncate">{pipelineStats.realizationRate.toFixed(1)}%</h3>
+            <p className="hidden md:block text-[10px] font-bold text-orange-500 mt-2 uppercase">OVERALL EFFICIENCY</p>
           </div>
-          <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center text-orange-500/20"><Clock size={32} /></div>
+          <div className="hidden md:flex w-16 h-16 bg-orange-50 rounded-full items-center justify-center text-orange-500/20"><Clock size={32} /></div>
         </div>
       </div>
 
       <div className="bg-white border border-gray-200 rounded-[32px] shadow-sm overflow-hidden">
-        <header className="px-8 py-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/10">
-          <div className="relative w-80">
+        <header className="px-4 md:px-8 py-4 md:py-6 border-b border-gray-100 flex flex-col md:flex-row gap-3 md:justify-between md:items-center bg-gray-50/10">
+          <div className="relative w-full md:w-80">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
-            <input type="text" placeholder="Filter projects..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-gray-100 transition-all outline-none" />
+            <input type="text" placeholder="Filter projects..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-3 md:py-2.5 bg-white border border-gray-200 rounded-xl text-[15px] md:text-xs font-medium md:font-bold focus:ring-2 focus:ring-gray-100 transition-all outline-none" />
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-2 md:gap-3">
             {(!currentUser || currentUser.user_type === 'admin') && (
-              <button onClick={() => setShowImportModal(true)} className="flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
+              <button onClick={() => setShowImportModal(true)} className="flex-1 md:flex-none justify-center flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
                 <FileText size={16} /> Bulk AI Import
               </button>
             )}
             {(!currentUser || currentUser.user_type === 'admin' || currentUser.user_type === 'partner') && (
-              <button onClick={() => { setFormData(initialForm); setFormAllocations([]); setFormLinks([]); setEditingId(null); setShowModal(true); }} className="flex items-center gap-2 bg-gray-900 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all">
+              <button onClick={() => { setFormData(initialForm); setFormAllocations([]); setFormLinks([]); setEditingId(null); setShowModal(true); }} className="flex-1 md:flex-none justify-center flex items-center gap-2 bg-gray-900 text-white px-4 md:px-6 py-3 md:py-2.5 rounded-xl font-black text-sm md:text-xs md:uppercase md:tracking-widest shadow-lg active:scale-95 transition-all">
                 <Plus size={16} /> New Project
               </button>
             )}

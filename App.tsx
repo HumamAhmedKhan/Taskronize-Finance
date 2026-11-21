@@ -572,7 +572,7 @@ const App: React.FC = () => {
         {/* Main Content Area */}
         <main className="flex-1 flex flex-col min-w-0 bg-white md:m-3 md:ml-0 md:rounded-[32px] md:border md:border-gray-200 overflow-hidden shadow-sm relative">
           <OverdueTicker currentUser={user} />
-          <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth pb-24 md:pb-8">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-8 scroll-smooth pb-24 md:pb-8">
             <div className="max-w-[1400px] mx-auto">
               {renderContent()}
             </div>

@@ -811,59 +811,59 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
   }, [combinedAuditPool, payments, globalStart, globalEnd]);
 
   return (
-    <div className="space-y-12 pb-32 animate-in fade-in">
+    <div className="space-y-5 md:space-y-12 pb-32 animate-in fade-in">
       {/* Summary Card */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">
+      <div className="grid grid-cols-2 gap-2 md:gap-4">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3.5 md:p-6 min-w-0">
+          <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider md:tracking-widest mb-2 md:mb-4">
             Total Outstanding
           </p>
-          <p className="text-3xl font-black text-gray-900 mb-4">
+          <p className="text-3xl font-black text-gray-900 mb-2 md:mb-4">
             {formatCurrency(paymentsSummary.partnersOwed + paymentsSummary.teamOwed)}
           </p>
           <div className="space-y-2">
-            <div className="flex justify-between text-sm">
+            <div className="flex justify-between gap-2 text-xs md:text-sm">
               <span className="text-gray-500">Partners</span>
               <span className="font-bold text-gray-700">{formatCurrency(paymentsSummary.partnersOwed)}</span>
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-500">Team production</span>
+            <div className="flex justify-between gap-2 text-xs md:text-sm">
+              <span className="text-gray-500"><span className="md:hidden">Team</span><span className="hidden md:inline">Team production</span></span>
               <span className="font-bold text-gray-700">{formatCurrency(paymentsSummary.teamOwed)}</span>
             </div>
           </div>
         </div>
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3.5 md:p-6 min-w-0">
+          <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider md:tracking-widest mb-2 md:mb-4">
             Total Settled This Period
           </p>
-          <p className="text-3xl font-black text-emerald-600 mb-4">
+          <p className="text-3xl font-black text-emerald-600 mb-2 md:mb-4">
             {formatCurrency(paymentsSummary.partnersSettled + paymentsSummary.teamSettled)}
           </p>
           <div className="space-y-2">
-            <div className="flex justify-between text-sm">
+            <div className="flex justify-between gap-2 text-xs md:text-sm">
               <span className="text-gray-500">Partners</span>
               <span className="font-bold text-emerald-600">{formatCurrency(paymentsSummary.partnersSettled)}</span>
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-500">Team production</span>
+            <div className="flex justify-between gap-2 text-xs md:text-sm">
+              <span className="text-gray-500"><span className="md:hidden">Team</span><span className="hidden md:inline">Team production</span></span>
               <span className="font-bold text-emerald-600">{formatCurrency(paymentsSummary.teamSettled)}</span>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-3">
         <div>
-          <h2 className="text-3xl font-extrabold text-gray-900 tracking-tight">Authorization Panel</h2>
-          <p className="text-gray-500 font-medium text-sm">Verify audits and release funds for team payables and wealth goals.</p>
+          <h2 className="text-lg md:text-3xl font-extrabold text-gray-900 tracking-tight"><span className="md:hidden">Pending payouts</span><span className="hidden md:inline">Authorization Panel</span></h2>
+          <p className="hidden md:block text-gray-500 font-medium text-sm">Verify audits and release funds for team payables and wealth goals.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-2 md:flex md:items-center gap-2">
           <button
             onClick={() => {
               setOtherFormData({ date: new Date().toISOString().split('T')[0], category: 'deduction', amount: 0, description: '', recipient_id: undefined, recipient_type: 'team' });
               setShowOtherModal(true);
             }}
-            className="flex items-center gap-2 bg-rose-600 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+            className="flex items-center justify-center gap-2 bg-rose-600 text-white px-3 md:px-6 py-3 md:py-2.5 rounded-xl font-black text-[13px] md:text-xs md:uppercase md:tracking-widest shadow-lg active:scale-95 transition-all"
           >
             <Minus size={16} /> Log Deduction
           </button>
@@ -872,23 +872,23 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
               setOtherFormData({ date: new Date().toISOString().split('T')[0], category: 'bonus', amount: 0, description: '', recipient_id: undefined, recipient_type: 'team' });
               setShowOtherModal(true);
             }}
-            className="flex items-center gap-2 bg-gray-900 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+            className="flex items-center justify-center gap-2 bg-gray-900 text-white px-3 md:px-6 py-3 md:py-2.5 rounded-xl font-black text-[13px] md:text-xs md:uppercase md:tracking-widest shadow-lg active:scale-95 transition-all"
           >
             <Plus size={16} /> Log Adjustment
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-6">
         {combinedAuditPool.map((status, idx) => (
-          <div key={idx} className={`bg-white rounded-[32px] border ${status.type === 'goal' ? 'border-indigo-100' : 'border-gray-100'} p-6 shadow-sm hover:shadow-lg transition-all group relative overflow-hidden`}>
+          <div key={idx} className={`bg-white rounded-2xl md:rounded-[32px] border ${status.type === 'goal' ? 'border-indigo-100' : 'border-gray-100'} p-4 md:p-6 shadow-sm hover:shadow-lg transition-all group relative overflow-hidden`}>
             {status.type === 'goal' && (
               <div className="absolute top-4 right-4 text-indigo-100 rotate-12 group-hover:rotate-0 transition-transform">
                 <Target size={40} strokeWidth={1.5} />
               </div>
             )}
-            <div className="flex items-center gap-4 mb-6">
-              <div className={`w-12 h-12 ${status.type === 'goal' ? 'bg-indigo-600 text-white' : 'bg-gray-900 text-white'} rounded-2xl flex items-center justify-center font-black text-lg`}>
+            <div className="flex items-center gap-3 md:gap-4 mb-3 md:mb-6">
+              <div className={`w-10 h-10 md:w-12 md:h-12 shrink-0 ${status.type === 'goal' ? 'bg-indigo-600 text-white' : 'bg-gray-900 text-white'} rounded-2xl flex items-center justify-center font-black text-lg`}>
                 {status.type === 'goal' ? <PiggyBank size={24} /> : status.member.name.charAt(0)}
               </div>
               <div>
@@ -896,11 +896,11 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
                 <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">{status.type === 'goal' ? 'Savings Target' : status.member.role}</p>
               </div>
             </div>
-            <div className={`rounded-2xl p-5 mb-6 flex flex-col items-center border ${status.type === 'goal' ? 'bg-indigo-50 border-indigo-100' : 'bg-gray-50 border-gray-100'}`}>
+            <div className={`rounded-xl md:rounded-2xl px-4 py-3 md:p-5 mb-3 md:mb-6 flex md:flex-col justify-between md:justify-start items-center border ${status.type === 'goal' ? 'bg-indigo-50 border-indigo-100' : 'bg-gray-50 border-gray-100'}`}>
               <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">
                 Pending {status.type === 'goal' ? 'Allocation' : 'Balance'}
               </span>
-              <span className={`text-3xl font-black tracking-tighter ${status.type === 'goal' ? 'text-indigo-600' : 'text-gray-900'}`}>{formatCurrency(status.totalOwed)}</span>
+              <span className={`text-xl md:text-3xl font-black tracking-tighter ${status.type === 'goal' ? 'text-indigo-600' : 'text-gray-900'}`}>{formatCurrency(status.totalOwed)}</span>
             </div>
             <button 
               onClick={() => { 
@@ -916,7 +916,7 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
                   setShowGoalModal(true);
                 }
               }} 
-              className={`w-full py-3.5 ${status.type === 'goal' ? 'bg-indigo-600' : 'bg-gray-900'} text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:opacity-90 transition-all flex items-center justify-center gap-2 shadow-sm`}
+              className={`w-full py-3 md:py-3.5 ${status.type === 'goal' ? 'bg-indigo-600' : 'bg-gray-900'} text-white rounded-xl font-black text-sm md:text-[10px] md:uppercase md:tracking-widest hover:opacity-90 transition-all flex items-center justify-center gap-2 shadow-sm`}
             >
               <ArrowUpCircle size={16} /> Review & {status.type === 'goal' ? 'Settle Savings' : 'Pay Member'}
             </button>
@@ -1194,13 +1194,28 @@ const PaymentsView: React.FC<PaymentsViewProps> = ({ globalStart, globalEnd, cur
       )}
 
       <div className="bg-white border border-gray-100 rounded-[32px] shadow-sm overflow-hidden">
-        <header className="px-8 py-5 border-b border-gray-50 flex items-center justify-between bg-gray-50/20">
+        <header className="px-4 md:px-8 py-4 md:py-5 border-b border-gray-50 flex items-center justify-between bg-gray-50/20">
           <div className="flex items-center gap-3">
             <History size={18} className="text-gray-400" />
             <h3 className="font-black text-base text-gray-900 uppercase tracking-widest">Disbursement Logs</h3>
           </div>
         </header>
-        <div className="overflow-x-auto">
+        {/* Mobile: list */}
+        <ul className="md:hidden divide-y divide-gray-100">
+          {payments.filter(p => (!globalStart || p.date >= globalStart) && (!globalEnd || p.date <= globalEnd)).sort((a,b) => b.date.localeCompare(a.date)).map(p => (
+            <li key={p.id} className="flex items-center gap-2 pl-4 pr-2 py-3">
+              <button onClick={() => { setViewingPayment(p); setShowReportModal(true); }} className="flex-1 min-w-0 flex items-center justify-between gap-3 text-left">
+                <span className="min-w-0">
+                  <span className="block text-[15px] font-semibold text-gray-900 truncate">{p.recipient_name}</span>
+                  <span className="block text-xs text-gray-500 capitalize">{p.date} · {p.payment_type}</span>
+                </span>
+                <span className="shrink-0 text-[15px] font-semibold text-indigo-600">{formatCurrency(p.total_amount)}</span>
+              </button>
+              <button onClick={() => handleDeletePayment(p.id)} aria-label="Delete payment" className="w-10 h-10 shrink-0 flex items-center justify-center text-rose-400 rounded-lg"><Trash2 size={16} /></button>
+            </li>
+          ))}
+        </ul>
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead className="bg-gray-50/50 text-gray-400 text-[9px] font-black uppercase tracking-widest border-b border-gray-100">
               <tr><th className="px-8 py-4">Date</th><th className="px-8 py-4">Recipient</th><th className="px-8 py-4">Type</th><th className="px-8 py-4 text-right">Settled Amount</th><th className="px-8 py-4 text-center">Actions</th></tr>

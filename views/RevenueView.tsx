@@ -257,21 +257,21 @@ const RevenueView: React.FC<RevenueViewProps> = ({ globalStart, globalEnd, curre
   const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
 
   return (
-    <div className="space-y-8 pb-32 animate-in fade-in">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div>
+    <div className="space-y-4 md:space-y-8 pb-32 animate-in fade-in">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-6">
+        <div className="hidden md:block">
           <h2 className="text-3xl font-extrabold text-gray-900 mb-1 tracking-tight">Revenue Records</h2>
           <p className="text-gray-500 font-medium text-sm">Settlements filtered by current global date range.</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-2 md:gap-3">
           {!isPartner && (
-            <button onClick={() => setShowImportModal(true)} className="flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
+            <button onClick={() => setShowImportModal(true)} className="flex-1 md:flex-none justify-center flex items-center gap-2 bg-indigo-50 text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all">
               <FileText size={18} /> Bulk AI Import
             </button>
           )}
           <button
             onClick={() => { setFormData(initialFormState); setShowModal(true); }}
-            className="flex items-center gap-2 bg-gray-900 text-white px-6 py-2.5 rounded-xl font-black text-sm shadow-lg active:scale-95 transition-all"
+            className="flex-1 md:flex-none justify-center flex items-center gap-2 bg-gray-900 text-white px-4 md:px-6 py-3 md:py-2.5 rounded-xl font-black text-sm shadow-lg active:scale-95 transition-all"
           >
             <Plus size={18} /> New Settlement
           </button>
@@ -279,10 +279,10 @@ const RevenueView: React.FC<RevenueViewProps> = ({ globalStart, globalEnd, curre
       </div>
 
       {/* Stream Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="flex md:grid md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-6 overflow-x-auto md:overflow-visible snap-x -mx-4 px-4 md:mx-0 md:px-0 pb-1">
         {streamSummary.map((stream, idx) => (
-          <div key={idx} className="bg-white rounded-[24px] border border-gray-100 p-6 shadow-sm hover:shadow-md transition-all">
-            <div className="flex items-center justify-between mb-4">
+          <div key={idx} className="shrink-0 w-[78%] md:w-auto snap-start bg-white rounded-2xl md:rounded-[24px] border border-gray-100 p-4 md:p-6 shadow-sm hover:shadow-md transition-all">
+            <div className="flex items-center justify-between mb-3 md:mb-4">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center font-black text-lg">
                   {stream.name.charAt(0)}
@@ -308,7 +308,7 @@ const RevenueView: React.FC<RevenueViewProps> = ({ globalStart, globalEnd, curre
       </div>
 
       <div className="bg-white border border-gray-200 rounded-[32px] shadow-sm overflow-hidden">
-        <div className="px-8 py-6 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gray-50/10">
+        <div className="px-4 md:px-8 py-4 md:py-6 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4 bg-gray-50/10">
           <div className="flex items-center gap-4 flex-1">
             <Search size={18} className="text-gray-400" />
             <input 
