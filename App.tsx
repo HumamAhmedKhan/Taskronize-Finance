@@ -21,7 +21,9 @@ import {
   Zap,
   Lock,
   Landmark,
-  CheckSquare
+  CheckSquare,
+  ChevronDown,
+  Bell
 } from 'lucide-react';
 import bcrypt from 'bcryptjs';
 import { User, PagePermissions, AppNotification } from './types';
@@ -84,6 +86,8 @@ const App: React.FC = () => {
   const [notifAllUsers, setNotifAllUsers] = useState<{ id: number; name: string }[]>([]);
   const [dropdownPos, setDropdownPos] = useState({ top: 80, left: 16 });
   const bellRef = useRef<HTMLButtonElement>(null);
+  const mobileBellRef = useRef<HTMLButtonElement>(null);
+  const [showMoreSheet, setShowMoreSheet] = useState(false);
   const notifDropdownRef = useRef<HTMLDivElement>(null);
 
   // Derive the first tab a user is allowed to see, used on login and page reload
@@ -172,7 +176,8 @@ const App: React.FC = () => {
     const handler = (e: MouseEvent) => {
       if (
         notifDropdownRef.current && !notifDropdownRef.current.contains(e.target as Node) &&
-        bellRef.current && !bellRef.current.contains(e.target as Node)
+        !(bellRef.current && bellRef.current.contains(e.target as Node)) &&
+        !(mobileBellRef.current && mobileBellRef.current.contains(e.target as Node))
       ) {
         setShowNotifDropdown(false);
       }
@@ -181,10 +186,14 @@ const App: React.FC = () => {
     return () => document.removeEventListener('mousedown', handler);
   }, [showNotifDropdown]);
 
-  const handleBellClick = () => {
-    if (!showNotifDropdown && bellRef.current) {
-      const rect = bellRef.current.getBoundingClientRect();
-      setDropdownPos({ top: rect.bottom + 8, left: rect.left });
+  const handleBellClick = (e?: React.MouseEvent<HTMLButtonElement>) => {
+    const anchor = e?.currentTarget ?? bellRef.current;
+    if (!showNotifDropdown && anchor) {
+      const rect = anchor.getBoundingClientRect();
+      // Keep the dropdown on screen on narrow (mobile) viewports
+      const width = Math.min(380, window.innerWidth - 16);
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+      setDropdownPos({ top: rect.bottom + 8, left });
       loadNotifications(notifUserId);
     }
     setShowNotifDropdown(prev => !prev);
@@ -307,6 +316,41 @@ const App: React.FC = () => {
     ...(user?.user_type === 'partner' || user?.user_type === 'team_member' ? [{ id: 'myEarnings', name: 'My Earnings', icon: DollarSign }] : [])
   ];
 
+  // ---- Mobile navigation (data-driven: every item is filtered through isTabVisible) ----
+  const visibleNav = navigation.filter(item => isTabVisible(item.id as keyof PagePermissions));
+  const navById = (id: string) => visibleNav.find(item => item.id === id);
+  const MOBILE_PRIMARY_IDS = ['dashboard', 'revenue', 'projects', 'payments'];
+  // Preferred tabs first; if a user can't see some of them, fill the bar with their next visible pages
+  const mobilePrimary = [
+    ...MOBILE_PRIMARY_IDS.map(navById).filter(Boolean),
+    ...visibleNav.filter(item => !MOBILE_PRIMARY_IDS.includes(item.id)),
+  ].slice(0, 4) as typeof navigation;
+  const isMoreActive = !mobilePrimary.some(item => item.id === activeTab);
+  const MOBILE_MORE_GROUPS: { label: string; ids: string[] }[] = [
+    { label: 'Main', ids: ['dashboard', 'revenue', 'projects', 'payments'] },
+    { label: 'Money', ids: ['expenses', 'incomeStreams', 'monthlyClosing', 'withdrawals', 'myEarnings'] },
+    { label: 'Work', ids: ['projectManagement', 'tasks', 'automations', 'aiAdvisor'] },
+    { label: 'People & admin', ids: ['team', 'users', 'backup'] },
+  ];
+  const groupedIds = MOBILE_MORE_GROUPS.flatMap(g => g.ids);
+  const mobileMoreGroups = [
+    ...MOBILE_MORE_GROUPS.map(g => ({ label: g.label, items: g.ids.map(navById).filter(Boolean) as typeof navigation })),
+    // Any page added to `navigation` later still shows up here automatically
+    { label: 'Other', items: visibleNav.filter(item => !groupedIds.includes(item.id)) },
+  ].filter(g => g.items.length > 0);
+  const goToTab = (id: string) => { setActiveTab(id as keyof PagePermissions); setShowMoreSheet(false); };
+  const activePageName = navigation.find(item => item.id === activeTab)?.name ?? 'Dashboard';
+  const periodLabel = (() => {
+    const fmt = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    if (!startDate || startDate <= '2020-01-01') return 'All time';
+    if (startDate === monthStart && endDate === today) return 'This month';
+    if (startDate === today && endDate === today) return 'Today';
+    return `${fmt(startDate)} – ${endDate ? fmt(endDate) : 'Now'}`;
+  })();
+
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard': return <Dashboard startDate={startDate} endDate={endDate} />;
@@ -334,17 +378,35 @@ const App: React.FC = () => {
       <div className="flex flex-col md:flex-row h-screen bg-[#f3f4f6] overflow-hidden">
         
         {/* Mobile Header */}
-        <header className="md:hidden bg-white px-6 py-4 flex items-center justify-between border-b border-gray-200 z-40">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-[#ff5a1f] rounded-lg flex items-center justify-center font-black text-white shrink-0 text-xs">T</div>
-            <span className="text-lg font-black tracking-tight text-gray-900 uppercase">Taskronize</span>
+        <header className="md:hidden bg-white px-4 py-3 flex items-center justify-between gap-3 border-b border-gray-200 z-40">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 bg-[#ff5a1f] rounded-lg flex items-center justify-center font-semibold text-white shrink-0 text-sm">T</div>
+            <h1 className="text-lg font-semibold tracking-tight text-gray-900 truncate">{activePageName}</h1>
           </div>
-          <button 
-            onClick={() => setShowDateModal(true)}
-            className="p-2 bg-gray-50 rounded-xl text-gray-400 hover:bg-gray-100 transition-all border border-gray-100"
-          >
-            <Calendar size={20} />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => setShowDateModal(true)}
+              aria-label="Change period"
+              className="h-9 px-3 flex items-center gap-1.5 bg-gray-100 rounded-full text-[13px] font-medium text-gray-800"
+            >
+              <Calendar size={15} className="text-indigo-600" />
+              <span className="max-w-[120px] truncate">{periodLabel}</span>
+              <ChevronDown size={14} className="text-gray-500" />
+            </button>
+            <button
+              ref={mobileBellRef}
+              onClick={handleBellClick}
+              aria-label="Notifications"
+              className="relative w-10 h-10 flex items-center justify-center text-gray-600 rounded-xl"
+            >
+              <Bell size={20} />
+              {unreadCount > 0 && (
+                <span className="absolute top-1 right-1 min-w-[16px] h-4 bg-red-500 text-white text-[9px] font-semibold rounded-full flex items-center justify-center px-0.5 leading-none">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
+            </button>
+          </div>
         </header>
 
         {/* Sidebar (Desktop) */}
@@ -432,33 +494,80 @@ const App: React.FC = () => {
         </aside>
 
         {/* Bottom Navigation (Mobile) */}
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-2 py-2 flex items-center justify-around z-40 pb-safe shadow-2xl">
-          {navigation.slice(0, 5).filter(item => isTabVisible(item.id as keyof PagePermissions)).map((item) => {
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-1 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] grid grid-cols-5 z-40">
+          {mobilePrimary.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id as keyof PagePermissions)}
-                className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${
-                  isActive ? 'text-indigo-600' : 'text-gray-400'
-                }`}
+                onClick={() => goToTab(item.id)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`flex flex-col items-center justify-center gap-1 min-h-[48px] rounded-xl ${isActive ? 'text-indigo-600' : 'text-gray-500'}`}
               >
-                <Icon size={20} />
-                <span className="text-[10px] font-black uppercase tracking-tighter">{item.name.split(' ')[0]}</span>
+                <Icon size={22} />
+                <span className={`text-[11px] leading-none ${isActive ? 'font-semibold' : 'font-medium'}`}>{item.id === 'dashboard' ? 'Home' : item.name}</span>
               </button>
             );
           })}
-          <button 
-            onClick={() => setActiveTab('incomeStreams')}
-            className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${
-              activeTab === 'incomeStreams' ? 'text-indigo-600' : 'text-gray-400'
-            }`}
+          <button
+            onClick={() => setShowMoreSheet(true)}
+            className={`flex flex-col items-center justify-center gap-1 min-h-[48px] rounded-xl ${isMoreActive || showMoreSheet ? 'text-indigo-600' : 'text-gray-500'}`}
           >
-            <Menu size={20} />
-            <span className="text-[10px] font-black uppercase tracking-tighter">More</span>
+            <Menu size={22} />
+            <span className={`text-[11px] leading-none ${isMoreActive ? 'font-semibold' : 'font-medium'}`}>More</span>
           </button>
         </nav>
+
+        {/* More sheet (Mobile) — every page the user can access */}
+        {showMoreSheet && (
+          <div className="md:hidden fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="All pages">
+            <button aria-label="Close" className="absolute inset-0 bg-gray-900/45" onClick={() => setShowMoreSheet(false)} />
+            <div className="absolute left-0 right-0 bottom-0 max-h-[88vh] overflow-y-auto bg-white rounded-t-3xl px-4 pt-2 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+              <div className="mx-auto w-10 h-1.5 rounded-full bg-gray-300" />
+              <div className="flex items-center justify-between py-3">
+                <h2 className="text-lg font-semibold text-gray-900">All pages</h2>
+                <button aria-label="Close" onClick={() => setShowMoreSheet(false)} className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="space-y-4">
+                {mobileMoreGroups.map(group => (
+                  <div key={group.label}>
+                    <h3 className="text-xs font-medium uppercase tracking-wider text-gray-500 mb-2">{group.label}</h3>
+                    <div className="grid grid-cols-4 gap-2">
+                      {group.items.map(item => {
+                        const Icon = item.icon;
+                        const isActive = activeTab === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() => goToTab(item.id)}
+                            className={`min-h-[76px] rounded-2xl flex flex-col items-center justify-center gap-1.5 px-1 text-center text-xs font-medium ${isActive ? 'bg-indigo-600 text-white' : 'bg-gray-50 text-gray-900'}`}
+                          >
+                            <Icon size={22} className={isActive ? 'text-white' : 'text-indigo-600'} />
+                            <span className="leading-tight">{item.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 pt-2 border-t border-gray-100">
+                <button
+                  onClick={() => { setShowMoreSheet(false); setChangePwForm({ currentPassword: '', newPassword: '', confirmPassword: '' }); setChangePwError(''); setShowChangePasswordModal(true); }}
+                  className="w-full h-12 flex items-center gap-3 text-[15px] font-medium text-gray-900"
+                >
+                  <Lock size={18} className="text-gray-500" /> Change password
+                </button>
+                <button onClick={() => { setShowMoreSheet(false); logout(); }} className="w-full h-12 flex items-center gap-3 text-[15px] font-medium text-red-600">
+                  <LogOut size={18} /> Sign out
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Main Content Area */}
         <main className="flex-1 flex flex-col min-w-0 bg-white md:m-3 md:ml-0 md:rounded-[32px] md:border md:border-gray-200 overflow-hidden shadow-sm relative">

@@ -92,7 +92,7 @@ const NotificationDropdown = React.forwardRef<
         position: 'fixed',
         top: position.top,
         left: position.left,
-        width: 380,
+        width: Math.min(380, window.innerWidth - 16),
         zIndex: 9999,
       }}
       className="bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col max-h-[520px]"
