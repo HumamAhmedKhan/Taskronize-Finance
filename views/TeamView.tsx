@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { supabase, db } from '../lib/supabase';
+import { supabase, db, adminUsers } from '../lib/supabase';
 import { TeamMember, User } from '../types';
 import { AuthContext } from '../App';
 import Modal from '../components/Modal';
 import { Plus, User as UserIcon, Edit2, Trash2, Download, Shield, ShieldAlert } from 'lucide-react';
-import bcrypt from 'bcryptjs';
 
 const ROLES = ['Partner', 'Developer', 'Designer', 'Bidder', 'Other'];
 
@@ -60,9 +59,7 @@ const TeamView: React.FC = () => {
       
       // Create user if requested
       if (createUser && username && password && memberId) {
-        const salt = await bcrypt.genSalt(10);
-        const password_hash = await bcrypt.hash(password, salt);
-        
+
         let permissions: any = {
           dashboard: 'full',
           revenue: 'none',
@@ -110,26 +107,29 @@ const TeamView: React.FC = () => {
           };
         }
         
-        await db.insert<User>('users', {
+        await adminUsers({
+          action: 'create',
           username,
-          password_hash,
-          name: formData.name || '',
-          email: null,
-          user_type: userType,
-          team_member_id: memberId,
-          status: 'active',
-          permissions
+          password,
+          profile: {
+            name: formData.name || '',
+            email: null,
+            user_type: userType,
+            team_member_id: memberId,
+            status: 'active',
+            permissions
+          }
         });
       }
-      
+
       setShowModal(false);
       setCreateUser(false);
       setUsername('');
       setPassword('');
       setUserType('team_member');
       loadData();
-    } catch (err) {
-      alert('Error saving team member');
+    } catch (err: any) {
+      alert(`Error saving team member: ${err?.message || 'unknown error'}`);
     }
   };
 

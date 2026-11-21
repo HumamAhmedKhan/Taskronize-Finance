@@ -1,9 +1,8 @@
 
 import React, { useState, useContext } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, loginEmail } from '../lib/supabase';
 import { AuthContext } from '../App';
 import { LogIn, Loader2 } from 'lucide-react';
-import bcrypt from 'bcryptjs';
 
 const Login: React.FC = () => {
   const [username, setUsername] = useState('');
@@ -18,30 +17,27 @@ const Login: React.FC = () => {
     setError('');
 
     try {
+      const { data: signIn, error: signInError } = await supabase.auth.signInWithPassword({
+        email: loginEmail(username),
+        password,
+      });
+      if (signInError || !signIn.user) {
+        throw new Error('Invalid credentials');
+      }
+
       const { data, error } = await supabase
         .from('users')
         .select('*')
-        .eq('username', username)
+        .eq('auth_id', signIn.user.id)
         .eq('status', 'active')
-        .single();
+        .maybeSingle();
 
       if (error || !data) {
+        await supabase.auth.signOut();
         throw new Error('Invalid credentials');
       }
 
-      // Check password — support both legacy bcrypt hashes and plaintext
-      let isValid = false;
-      if (data.password_hash.startsWith('$2a$') || data.password_hash.startsWith('$2b$')) {
-        isValid = await bcrypt.compare(password, data.password_hash);
-      } else {
-        isValid = password === data.password_hash;
-      }
-
-      if (isValid) {
-        auth?.login(data);
-      } else {
-        throw new Error('Invalid credentials');
-      }
+      auth?.login(data);
     } catch (err: any) {
       setError(err.message || 'An error occurred');
     } finally {

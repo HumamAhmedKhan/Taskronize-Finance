@@ -25,9 +25,8 @@ import {
   ChevronDown,
   Bell
 } from 'lucide-react';
-import bcrypt from 'bcryptjs';
 import { User, PagePermissions, AppNotification } from './types';
-import { supabase } from './lib/supabase';
+import { supabase, loginEmail } from './lib/supabase';
 import Login from './views/Login';
 import Dashboard from './views/Dashboard';
 import RevenueView from './views/RevenueView';
@@ -61,6 +60,7 @@ export const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [activeTab, setActiveTab] = useState<keyof PagePermissions>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   
@@ -110,30 +110,33 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    const saved = localStorage.getItem('taskronize_user');
-    if (!saved) return;
-    const cached: User = JSON.parse(saved);
-    setUser(cached);
-    setActiveTab(getFirstAccessibleTab(cached));
-    // Re-fetch from DB so stale cached fields (e.g. linked_income_stream_ids) are always fresh
-    supabase.from('users').select('*').eq('id', cached.id).single().then(({ data }) => {
-      if (data) {
-        setUser(data);
-        setActiveTab(getFirstAccessibleTab(data));
-        localStorage.setItem('taskronize_user', JSON.stringify(data));
+    localStorage.removeItem('taskronize_user');
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session) {
+        const { data } = await supabase.from('users').select('*')
+          .eq('auth_id', session.user.id).eq('status', 'active').maybeSingle();
+        if (data) {
+          setUser(data);
+          setActiveTab(getFirstAccessibleTab(data));
+        } else {
+          await supabase.auth.signOut();
+        }
       }
+      setAuthChecked(true);
     });
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') setUser(null);
+    });
+    return () => sub.subscription.unsubscribe();
   }, []);
 
   const login = (userData: User) => {
     setUser(userData);
-    localStorage.setItem('taskronize_user', JSON.stringify(userData));
     setActiveTab(getFirstAccessibleTab(userData));
   };
 
   const logout = () => {
-    setUser(null);
-    localStorage.removeItem('taskronize_user');
+    supabase.auth.signOut().finally(() => setUser(null));
   };
 
   // Derived notification user id (admin can view other users' notifications)
@@ -233,24 +236,16 @@ const App: React.FC = () => {
     setChangePwLoading(true);
     setChangePwError('');
     try {
-      const currentHash = user!.password_hash;
-      let isValid = false;
-      if (currentHash?.startsWith('$2a$') || currentHash?.startsWith('$2b$')) {
-        isValid = await bcrypt.compare(changePwForm.currentPassword, currentHash);
-      } else {
-        isValid = changePwForm.currentPassword === currentHash;
-      }
-      if (!isValid) {
+      const { error: verifyError } = await supabase.auth.signInWithPassword({
+        email: loginEmail(user!.username),
+        password: changePwForm.currentPassword,
+      });
+      if (verifyError) {
         setChangePwError('Current password is incorrect.');
         return;
       }
-      // Hash new password before saving
-      const salt = await bcrypt.genSalt(10);
-      const newPasswordHash = await bcrypt.hash(changePwForm.newPassword, salt);
-      await supabase.from('users').update({ password_hash: newPasswordHash }).eq('id', user!.id);
-      const updatedUser = { ...user!, password_hash: newPasswordHash };
-      setUser(updatedUser);
-      localStorage.setItem('taskronize_user', JSON.stringify(updatedUser));
+      const { error: updateError } = await supabase.auth.updateUser({ password: changePwForm.newPassword });
+      if (updateError) throw updateError;
       setShowChangePasswordModal(false);
       setChangePwForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
       alert('Password changed successfully.');
@@ -288,6 +283,10 @@ const App: React.FC = () => {
     }
     return level === 'full' || level === 'edit-hidden';
   };
+
+  if (!authChecked) {
+    return <div className="min-h-screen bg-slate-900" />;
+  }
 
   if (!user) {
     return (

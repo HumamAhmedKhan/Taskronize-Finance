@@ -6,6 +6,22 @@ const supabaseKey = 'sb_publishable_gbHBZ_uGIEKwd1FgATuA8g_IKqm1k76';
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Must match public.login_email() in the database and the admin-users edge function.
+export const loginEmail = (username: string) => `${username.trim().toLowerCase()}@users.taskronize.com`;
+
+export const USERNAME_PATTERN = /^[A-Za-z0-9._-]{2,40}$/;
+
+// Creating users and setting other users' passwords needs admin rights, so it runs server-side.
+export const adminUsers = async (payload: Record<string, unknown>) => {
+  const { data, error } = await supabase.functions.invoke('admin-users', { body: payload });
+  if (error) {
+    let message = error.message;
+    try { message = (await (error as any).context.json()).error ?? message; } catch {}
+    throw new Error(message);
+  }
+  return data;
+};
+
 // Helper for database operations with safe generic syntax
 export const db = {
   get: async function<T>(table: string) {
