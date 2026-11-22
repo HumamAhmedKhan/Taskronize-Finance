@@ -63,6 +63,9 @@ const InvoicesView: React.FC = () => {
   const [query, setQuery] = useState('');
   const [client, setClient] = useState<Client | null>(null);
   const [balances, setBalances] = useState<ProjectInvoiceBalance[]>([]);
+  const [showDone, setShowDone] = useState(false);
+  const doneCount = balances.filter(b => b.remaining <= 0).length;
+  const visibleBalances = showDone ? balances : balances.filter(b => b.remaining > 0);
   const [selected, setSelected] = useState<Record<number, DraftLine>>({});
   const [email, setEmail] = useState('');
   const [mirjanInvolved, setMirjanInvolved] = useState(false);
@@ -120,6 +123,7 @@ const InvoicesView: React.FC = () => {
     setClient(c);
     setEmail(c.email || '');
     setSelected({});
+    setShowDone(false);
     const { data, error } = await supabase.rpc('project_invoice_balances', { p_client_id: c.id });
     if (error) { showToast(`Could not load projects: ${error.message}`, 'error'); return; }
     const loaded: ProjectInvoiceBalance[] = (data || []).map((b: any) => ({ ...b, project_value: Number(b.project_value), paid: Number(b.paid), open_invoiced: Number(b.open_invoiced), remaining: Number(b.remaining) }));
@@ -301,6 +305,10 @@ const InvoicesView: React.FC = () => {
               <p className="text-sm text-slate-600 bg-amber-50 border border-amber-100 rounded-xl p-4">
                 {client?.name} has no projects in an income stream set up for Stripe invoicing. On the Income Streams page, edit the stream and tick “Invoice through Stripe”.
               </p>
+            ) : visibleBalances.length === 0 ? (
+              <p className="text-sm text-slate-600 bg-slate-50 border border-slate-100 rounded-xl p-4">
+                Every project for {client?.name} is already paid or fully invoiced — nothing left to bill.
+              </p>
             ) : (
               <div className="overflow-x-auto border border-slate-100 rounded-xl">
                 <table className="w-full text-sm">
@@ -315,7 +323,7 @@ const InvoicesView: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {balances.map(b => {
+                    {visibleBalances.map(b => {
                       const done = b.remaining <= 0;
                       return (
                         <tr key={b.project_id} className={done ? 'text-slate-400' : 'hover:bg-slate-50 cursor-pointer'} onClick={() => !done && toggleProject(b)}>
@@ -332,7 +340,12 @@ const InvoicesView: React.FC = () => {
                 </table>
               </div>
             )}
-            <div className="flex justify-end">
+            <div className="flex items-center justify-between gap-4">
+              {doneCount > 0 ? (
+                <button type="button" onClick={() => setShowDone(v => !v)} className="text-xs font-semibold text-slate-500 hover:text-slate-800">
+                  {showDone ? 'Hide' : 'Show'} {doneCount} fully paid or already invoiced
+                </button>
+              ) : <span />}
               <button disabled={selectedBalances.length === 0} onClick={() => setStep('review')} className="px-5 py-2.5 bg-slate-900 text-white rounded-xl font-bold disabled:opacity-40">
                 Continue with {selectedBalances.length} project{selectedBalances.length === 1 ? '' : 's'}
               </button>
