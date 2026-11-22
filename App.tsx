@@ -23,7 +23,8 @@ import {
   Landmark,
   CheckSquare,
   ChevronDown,
-  Bell
+  Bell,
+  FileText
 } from 'lucide-react';
 import { User, PagePermissions, AppNotification } from './types';
 import { supabase, loginEmail } from './lib/supabase';
@@ -44,6 +45,7 @@ import MyEarningsView from './views/MyEarningsView';
 import AutomationsView from './views/AutomationsView';
 import WithdrawalsView from './views/WithdrawalsView';
 import TasksView from './views/TasksView';
+import InvoicesView from './views/InvoicesView';
 import NotificationDropdown from './components/NotificationDropdown';
 import { DateShortcuts } from './components/DateShortcuts';
 import Modal from './components/Modal';
@@ -94,7 +96,7 @@ const App: React.FC = () => {
   const getFirstAccessibleTab = (userData: User): keyof PagePermissions => {
     const dashPerm = userData.permissions?.['dashboard'];
     if (dashPerm && dashPerm !== 'none') return 'dashboard';
-    const allTabs: (keyof PagePermissions)[] = ['tasks', 'revenue', 'projects', 'projectManagement', 'payments', 'expenses', 'incomeStreams', 'team', 'users', 'monthlyClosing', 'backup', 'myEarnings'];
+    const allTabs: (keyof PagePermissions)[] = ['tasks', 'revenue', 'projects', 'projectManagement', 'payments', 'expenses', 'incomeStreams', 'invoices', 'team', 'users', 'monthlyClosing', 'backup', 'myEarnings'];
     const firstTab = allTabs.find(tab => {
       if (tab === 'tasks') {
         if (userData.user_type === 'admin') return true;
@@ -303,6 +305,7 @@ const App: React.FC = () => {
     { id: 'projects', name: 'Projects', icon: Briefcase },
     { id: 'projectManagement', name: 'Project Mgmt', icon: Briefcase },
     { id: 'payments', name: 'Payments', icon: CreditCard },
+    { id: 'invoices', name: 'Invoices', icon: FileText },
     { id: 'expenses', name: 'Expenses', icon: Receipt },
     { id: 'incomeStreams', name: 'Income Streams', icon: Database },
     { id: 'tasks', name: 'Tasks', icon: CheckSquare },
@@ -327,7 +330,7 @@ const App: React.FC = () => {
   const isMoreActive = !mobilePrimary.some(item => item.id === activeTab);
   const MOBILE_MORE_GROUPS: { label: string; ids: string[] }[] = [
     { label: 'Main', ids: ['dashboard', 'revenue', 'projects', 'payments'] },
-    { label: 'Money', ids: ['expenses', 'incomeStreams', 'monthlyClosing', 'withdrawals', 'myEarnings'] },
+    { label: 'Money', ids: ['invoices', 'expenses', 'incomeStreams', 'monthlyClosing', 'withdrawals', 'myEarnings'] },
     { label: 'Work', ids: ['projectManagement', 'tasks', 'automations', 'aiAdvisor'] },
     { label: 'People & admin', ids: ['team', 'users', 'backup'] },
   ];
@@ -355,7 +358,7 @@ const App: React.FC = () => {
       case 'dashboard': return <Dashboard startDate={startDate} endDate={endDate} onNavigate={goToTab} canOpen={(id) => isTabVisible(id as keyof PagePermissions)} />;
       case 'aiAdvisor': return <AIAdvisorView />;
       case 'revenue': return <RevenueView globalStart={startDate} globalEnd={endDate} currentUser={user} />;
-      case 'projects': return <ProjectsView globalStart={startDate} globalEnd={endDate} currentUser={user} />;
+      case 'projects': return <ProjectsView globalStart={startDate} globalEnd={endDate} currentUser={user} onNavigate={goToTab} />;
       case 'projectManagement': return <ProjectManagementView globalStart={startDate} globalEnd={endDate} currentUser={user} />;
       case 'payments': return <PaymentsView globalStart={startDate} globalEnd={endDate} currentUser={user} />;
       case 'expenses': return <ExpensesView globalStart={startDate} globalEnd={endDate} />;
@@ -368,6 +371,7 @@ const App: React.FC = () => {
       case 'withdrawals': return <WithdrawalsView />;
       case 'myEarnings': return <MyEarningsView currentUser={user} globalStart={startDate} globalEnd={endDate} />;
       case 'tasks': return <TasksView currentUser={user} activeTab={tasksActiveTab} onTabChange={setTasksActiveTab} />;
+      case 'invoices': return <InvoicesView />;
       default: return <Dashboard startDate={startDate} endDate={endDate} />;
     }
   };

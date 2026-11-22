@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useContext } from 'react';
 import { supabase, db, checkSettledAllocations } from '../lib/supabase';
 import { Project, IncomeStream, TeamMember, ProjectAllocation, Revenue } from '../types';
 import { extractPaidIds } from '../utils/calculations';
@@ -7,6 +7,8 @@ import SearchableSelect from '../components/SearchableSelect';
 import Table from '../components/Table';
 import Modal from '../components/Modal';
 import BulkImportModal from '../components/BulkImportModal';
+import BulkActionBar from '../components/BulkActionBar';
+import { AuthContext } from '../App';
 import { 
   Plus, 
   Search, 
@@ -21,23 +23,43 @@ import {
   FileText,
   AlertCircle,
   PieChart,
-  FolderOpen
+  FolderOpen,
+  Receipt
 } from 'lucide-react';
 
 interface ProjectsViewProps {
   globalStart: string;
   globalEnd: string;
   currentUser: User;
+  onNavigate?: (tab: string) => void;
 }
 
-const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, currentUser }) => {
+const emptyBulkFields = {
+  updateStream: false, income_stream_id: 0,
+  updateClient: false, client_name: '',
+  updateDev: false, team_member_id: 0,
+  updateDate: false, date: '',
+};
+
+const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, currentUser, onNavigate }) => {
+  const auth = useContext(AuthContext);
+  const canBulkEdit = currentUser.user_type === 'admin' || currentUser.permissions?.pmBulkEdit === 'full';
+  const [selectedProjectIds, setSelectedProjectIds] = useState<number[]>([]);
+  const [tableKey, setTableKey] = useState(0);
+  const [showBulkModal, setShowBulkModal] = useState(false);
+  const [bulkFields, setBulkFields] = useState(emptyBulkFields);
+  const [bulkSaving, setBulkSaving] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [mobileFilter, setMobileFilter] = useState<'all' | 'awaiting' | 'paid'>('all');
   const [streams, setStreams] = useState<IncomeStream[]>([]);
+  const [clientNames, setClientNames] = useState<string[]>([]);
+  useEffect(() => {
+    supabase.from('clients').select('name').order('name').then(({ data }) => setClientNames((data || []).map(c => c.name)));
+  }, []);
   const [revenues, setRevenues] = useState<Revenue[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [allocations, setAllocations] = useState<ProjectAllocation[]>([]);
-  const [allLinks, setAllLinks] = useState<{ project_id: number; revenue_id: number }[]>([]);
+  const [allLinks, setAllLinks] = useState<{ project_id: number; revenue_id: number; amount: number | null }[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [paymentRows, setPaymentRows] = useState<any[]>([]);
   const [otherPayments, setOtherPayments] = useState<any[]>([]);
@@ -67,7 +89,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         supabase.from('projects').select('*').gte('date', globalStart).lte('date', globalEnd).order('date', { ascending: false }).order('created_at', { ascending: false }),
         db.get<IncomeStream>('income_streams'),
         db.get<Revenue>('revenues'),
-        supabase.from('project_revenue_links').select('project_id, revenue_id'),
+        supabase.from('project_revenue_links').select('project_id, revenue_id, amount'),
         db.get<TeamMember>('team_members'),
         db.get<ProjectAllocation>('project_allocations'),
         db.get<any>('production_payments'),
@@ -107,6 +129,73 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
   };
 
   useEffect(() => { loadData(); }, [globalStart, globalEnd]);
+
+  const clearSelection = () => { setSelectedProjectIds([]); setTableKey(k => k + 1); };
+
+  const handleBulkSave = async () => {
+    const ids = selectedProjectIds;
+    const f = bulkFields;
+    if (!ids.length) return;
+    if (!f.updateStream && !f.updateClient && !f.updateDev && !f.updateDate) return alert('Tick at least one field to change.');
+    if (f.updateClient && !f.client_name.trim()) return alert('Enter a client name.');
+    if (f.updateDev && !f.team_member_id) return alert('Choose a team member.');
+    if (f.updateDate && !f.date) return alert('Choose a date.');
+
+    setBulkSaving(true);
+    try {
+      const patch: Partial<Project> = {};
+      if (f.updateStream) patch.income_stream_id = f.income_stream_id || null;
+      if (f.updateClient) patch.client_name = f.client_name.trim();
+      if (f.updateDate) patch.date = f.date;
+      if (Object.keys(patch).length) {
+        const { error } = await supabase.from('projects').update(patch).in('id', ids);
+        if (error) throw error;
+      }
+
+      let assigned = 0;
+      if (f.updateDev) {
+        // Adds the member as a $0 assignee; never removes or changes existing allocations.
+        const { data: existing, error: existingErr } = await supabase.from('project_allocations')
+          .select('project_id').in('project_id', ids).eq('team_member_id', f.team_member_id);
+        if (existingErr) throw existingErr;
+        const already = new Set((existing || []).map(a => a.project_id));
+        const rows = ids.filter(id => !already.has(id)).map(id => ({
+          project_id: id, team_member_id: f.team_member_id, role: 'Assignee', amount: 0, created_at: new Date().toISOString(),
+        }));
+        if (rows.length) {
+          const { error } = await supabase.from('project_allocations').insert(rows);
+          if (error) throw error;
+        }
+        assigned = rows.length;
+      }
+
+      setShowBulkModal(false);
+      setBulkFields(emptyBulkFields);
+      clearSelection();
+      await loadData();
+      alert(`Updated ${ids.length} project${ids.length === 1 ? '' : 's'}.` + (f.updateDev ? ` Developer added to ${assigned} (already on ${ids.length - assigned}).` : ''));
+    } catch (err: any) {
+      console.error(err);
+      alert(`Bulk edit failed: ${err.message || 'unknown error'}`);
+      await loadData();
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
+  const handleInvoiceSelection = () => {
+    const sel = projects.filter(p => selectedProjectIds.includes(p.id));
+    const clientIds = new Set(sel.map(p => p.client_id));
+    if (clientIds.size !== 1 || !sel[0]?.client_id) return alert('Select projects from a single client to create one invoice.');
+    const notInvoiceable = sel.filter(p => !streams.find(s => s.id === p.income_stream_id)?.stripe_invoicing);
+    if (notInvoiceable.length) {
+      return alert(`These projects are not in an income stream set up for Stripe invoicing:\n${notInvoiceable.map(p => '• ' + p.project_name).join('\n')}`);
+    }
+    try {
+      sessionStorage.setItem('invoiceDraft', JSON.stringify({ client_id: sel[0].client_id, project_ids: sel.map(p => p.id) }));
+    } catch {}
+    onNavigate?.('invoices');
+  };
 
   const handleEdit = async (p: Project) => {
     setEditingId(p.id);
@@ -295,17 +384,22 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
     return ids;
   }, [payments]);
 
+  // A link's `amount` is this project's share of a revenue shared across projects; null means the whole revenue.
+  const paidForProject = (projectId: number) =>
+    allLinks.filter(l => l.project_id === projectId).reduce((s, l) => {
+      if (l.amount != null) return s + Number(l.amount);
+      return s + Number(revenues.find(r => r.id === l.revenue_id)?.total_sale || 0);
+    }, 0);
+
   const pipelineStats = useMemo(() => {
     const totalValue = projects.reduce((sum, p) => sum + Number(p.project_value || 0), 0);
     const realizedValue = projects.reduce((sum, p) => {
-      const linkedRevIds = allLinks.filter(l => l.project_id === p.id).map(l => l.revenue_id);
-      const linkedVal = revenues.filter(r => linkedRevIds.includes(r.id)).reduce((s, r) => s + Number(r.total_sale), 0);
+      const linkedVal = paidForProject(p.id);
       return sum + Math.min(linkedVal, Number(p.project_value)); // Cap at project value
     }, 0);
     const realizationRate = totalValue > 0 ? (realizedValue / totalValue) * 100 : 0;
     const settledCount = projects.filter(p => {
-        const linkedRevIds = allLinks.filter(l => l.project_id === p.id).map(l => l.revenue_id);
-        const linkedVal = revenues.filter(r => linkedRevIds.includes(r.id)).reduce((s, r) => s + Number(r.total_sale), 0);
+        const linkedVal = paidForProject(p.id);
         return linkedVal >= Number(p.project_value) * 0.99; // 1% tolerance
     }).length;
     return { totalValue, realizedValue, realizationRate, settledCount };
@@ -337,8 +431,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
 
   // Mobile: how much of each project's value is covered by linked revenue (same rule as the desktop STATUS column)
   const projectCollection = (p: Project) => {
-    const linkedRevIds = allLinks.filter(l => l.project_id === p.id).map(l => l.revenue_id);
-    const linkedVal = revenues.filter(r => linkedRevIds.includes(r.id)).reduce((sum, r) => sum + Number(r.total_sale), 0);
+    const linkedVal = paidForProject(p.id);
     const percent = p.project_value > 0 ? Math.min(100, (linkedVal / p.project_value) * 100) : 0;
     const isFull = linkedVal >= p.project_value * 0.99;
     return { linkedVal, percent, isFull };
@@ -496,6 +589,9 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
           </div>
         </header>
         <Table<Project>
+          key={tableKey}
+          selectable={canBulkEdit}
+          onSelectionChange={(ids) => setSelectedProjectIds(ids.map(Number))}
           data={projects.filter(p => p.project_name.toLowerCase().includes(searchTerm.toLowerCase()) || p.client_name.toLowerCase().includes(searchTerm.toLowerCase()))}
           rowKey={(p) => String(p.id)}
           columns={[
@@ -543,8 +639,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
               }
             ] : []),
             { header: 'STATUS', render: (p) => {
-              const linkedRevIds = allLinks.filter(l => l.project_id === p.id).map(l => l.revenue_id);
-              const linkedVal = revenues.filter(r => linkedRevIds.includes(r.id)).reduce((s, r) => s + Number(r.total_sale), 0);
+              const linkedVal = paidForProject(p.id);
               const percent = p.project_value > 0 ? (linkedVal / p.project_value) * 100 : 0;
               const isFull = linkedVal >= p.project_value * 0.99; // 1% tolerance for float logic
 
@@ -627,7 +722,13 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Client</label>
-              <input type="text" value={formData.client_name} onChange={e => setFormData({...formData, client_name: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold" />
+              <input type="text" list="project-client-options" value={formData.client_name} onChange={e => setFormData({...formData, client_name: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold" placeholder="Start typing a client..." />
+              <datalist id="project-client-options">
+                {clientNames.map(name => <option key={name} value={name} />)}
+              </datalist>
+              {formData.client_name?.trim() && !clientNames.some(n => n.toLowerCase() === formData.client_name!.trim().replace(/\s+/g, ' ').toLowerCase()) && (
+                <p className="text-[11px] font-semibold text-amber-600">New client — check the spelling, or pick an existing one from the list.</p>
+              )}
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Revenue Stream</label>
@@ -930,6 +1031,80 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
               })()}
             </div>
           )}
+        </div>
+      </Modal>
+
+      {canBulkEdit && (
+        <BulkActionBar
+          selectedCount={selectedProjectIds.length}
+          onClearSelection={clearSelection}
+          actions={[
+            { label: 'Bulk edit', icon: <Layers size={16} />, onClick: () => { setBulkFields(emptyBulkFields); setShowBulkModal(true); }, variant: 'primary' },
+            ...(auth?.canAccess('invoices') ? [{ label: 'Create invoice', icon: <Receipt size={16} />, onClick: handleInvoiceSelection }] : []),
+          ]}
+        />
+      )}
+
+      <Modal
+        title={`Bulk edit ${selectedProjectIds.length} project${selectedProjectIds.length === 1 ? '' : 's'}`}
+        isOpen={showBulkModal}
+        onClose={() => setShowBulkModal(false)}
+        onSave={handleBulkSave}
+        saveLabel={bulkSaving ? 'Saving...' : 'Apply to selected'}
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-slate-500">Tick the fields to change. Unticked fields are left as they are.</p>
+
+          <div className="p-4 bg-slate-50 rounded-xl space-y-2">
+            <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+              <input type="checkbox" checked={bulkFields.updateStream} onChange={e => setBulkFields({ ...bulkFields, updateStream: e.target.checked })} /> Revenue stream
+            </label>
+            {bulkFields.updateStream && (
+              <select value={bulkFields.income_stream_id} onChange={e => setBulkFields({ ...bulkFields, income_stream_id: Number(e.target.value) })} className="w-full px-4 py-2 border rounded-xl text-sm">
+                <option value={0}>— No stream —</option>
+                {streams.map(s => <option key={s.id} value={s.id}>{s.name}{s.stripe_invoicing ? ' (Stripe invoicing)' : ''}</option>)}
+              </select>
+            )}
+          </div>
+
+          <div className="p-4 bg-slate-50 rounded-xl space-y-2">
+            <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+              <input type="checkbox" checked={bulkFields.updateClient} onChange={e => setBulkFields({ ...bulkFields, updateClient: e.target.checked })} /> Client
+            </label>
+            {bulkFields.updateClient && (
+              <>
+                <input list="bulk-client-options" value={bulkFields.client_name} onChange={e => setBulkFields({ ...bulkFields, client_name: e.target.value })} placeholder="Start typing a client..." className="w-full px-4 py-2 border rounded-xl text-sm" />
+                <datalist id="bulk-client-options">{clientNames.map(n => <option key={n} value={n} />)}</datalist>
+                {bulkFields.client_name.trim() && !clientNames.some(n => n.toLowerCase() === bulkFields.client_name.trim().replace(/\s+/g, ' ').toLowerCase()) && (
+                  <p className="text-[11px] font-semibold text-amber-600">New client — check the spelling, or pick an existing one from the list.</p>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="p-4 bg-slate-50 rounded-xl space-y-2">
+            <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+              <input type="checkbox" checked={bulkFields.updateDev} onChange={e => setBulkFields({ ...bulkFields, updateDev: e.target.checked })} /> Assign developer
+            </label>
+            {bulkFields.updateDev && (
+              <>
+                <select value={bulkFields.team_member_id} onChange={e => setBulkFields({ ...bulkFields, team_member_id: Number(e.target.value) })} className="w-full px-4 py-2 border rounded-xl text-sm">
+                  <option value={0}>Choose team member...</option>
+                  {teamMembers.map(m => <option key={m.id} value={m.id}>{m.name} · {m.role}</option>)}
+                </select>
+                <p className="text-[11px] text-slate-500">Added as an assignee with $0 owed. Existing assignees and amounts are kept.</p>
+              </>
+            )}
+          </div>
+
+          <div className="p-4 bg-slate-50 rounded-xl space-y-2">
+            <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+              <input type="checkbox" checked={bulkFields.updateDate} onChange={e => setBulkFields({ ...bulkFields, updateDate: e.target.checked })} /> Project date
+            </label>
+            {bulkFields.updateDate && (
+              <input type="date" value={bulkFields.date} onChange={e => setBulkFields({ ...bulkFields, date: e.target.value })} className="w-full px-4 py-2 border rounded-xl text-sm" />
+            )}
+          </div>
         </div>
       </Modal>
 
