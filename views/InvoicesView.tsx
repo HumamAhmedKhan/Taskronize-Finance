@@ -111,24 +111,50 @@ const InvoicesView: React.FC = () => {
     setEmail(''); setMirjanInvolved(false); setCreateError(''); setCreated(null);
   };
 
-  const pickClient = async (c: Client) => {
+  const draftLine = (b: ProjectInvoiceBalance): DraftLine => ({
+    description: `${b.project_name} — Installment ${b.installments_so_far + 1}`,
+    amount: b.remaining.toFixed(2),
+  });
+
+  const pickClient = async (c: Client, preselectIds: number[] = []) => {
     setClient(c);
     setEmail(c.email || '');
     setSelected({});
     const { data, error } = await supabase.rpc('project_invoice_balances', { p_client_id: c.id });
     if (error) { showToast(`Could not load projects: ${error.message}`, 'error'); return; }
-    setBalances((data || []).map((b: any) => ({ ...b, project_value: Number(b.project_value), paid: Number(b.paid), open_invoiced: Number(b.open_invoiced), remaining: Number(b.remaining) })));
-    setStep('projects');
+    const loaded: ProjectInvoiceBalance[] = (data || []).map((b: any) => ({ ...b, project_value: Number(b.project_value), paid: Number(b.paid), open_invoiced: Number(b.open_invoiced), remaining: Number(b.remaining) }));
+    setBalances(loaded);
+    const preselected = loaded.filter(b => preselectIds.includes(b.project_id) && b.remaining > 0);
+    if (preselected.length) {
+      setSelected(Object.fromEntries(preselected.map(b => [b.project_id, draftLine(b)])));
+      if (preselected.length < preselectIds.length) showToast(`${preselectIds.length - preselected.length} selected project(s) have nothing left to invoice and were skipped.`, 'error');
+      setStep('review');
+    } else {
+      if (preselectIds.length) showToast('The selected projects have nothing left to invoice.', 'error');
+      setStep('projects');
+    }
   };
+
+  // Opened from Projects → "Create invoice" with a selection.
+  useEffect(() => {
+    if (loading || !clients.length) return;
+    let draft: { client_id: number; project_ids: number[] } | null = null;
+    try {
+      draft = JSON.parse(sessionStorage.getItem('invoiceDraft') || 'null');
+      sessionStorage.removeItem('invoiceDraft');
+    } catch {}
+    const c = draft && clients.find(x => x.id === draft!.client_id);
+    if (c && draft) {
+      setTab('invoices'); setCreated(null); setCreateError(''); setMirjanInvolved(false);
+      pickClient(c, draft.project_ids);
+    }
+  }, [loading, clients]);
 
   const toggleProject = (b: ProjectInvoiceBalance) => {
     setSelected(prev => {
       const next = { ...prev };
       if (next[b.project_id]) delete next[b.project_id];
-      else next[b.project_id] = {
-        description: `${b.project_name} — Installment ${b.installments_so_far + 1}`,
-        amount: b.remaining.toFixed(2),
-      };
+      else next[b.project_id] = draftLine(b);
       return next;
     });
   };
