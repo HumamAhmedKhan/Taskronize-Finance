@@ -177,7 +177,9 @@ const InvoicesView: React.FC = () => {
   }, [selected, balances]);
   const total = selectedBalances.reduce((s, b) => s + (Number(selected[b.project_id].amount) || 0), 0);
   const emailValid = EMAIL_RE.test(email.trim());
-  const canCreate = selectedBalances.length > 0 && Object.keys(lineErrors).length === 0 && emailValid && !creating;
+  // A paid invoice becomes one revenue entry, which belongs to a single income stream.
+  const mixedStreams = new Set(selectedBalances.map(b => b.income_stream_id)).size > 1;
+  const canCreate = selectedBalances.length > 0 && Object.keys(lineErrors).length === 0 && emailValid && !mixedStreams && !creating;
   const dueDate = new Date(Date.now() + DAYS_UNTIL_DUE * 86400000).toISOString().slice(0, 10);
 
   const setLine = (projectId: number, patch: Partial<DraftLine>) =>
@@ -405,6 +407,11 @@ const InvoicesView: React.FC = () => {
               Mirjan involved <span className="text-slate-400">(copied to the revenue entries when paid)</span>
             </label>
 
+            {mixedStreams && (
+              <p className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-xl p-3">
+                These projects are in different income streams ({[...new Set(selectedBalances.map(b => b.stream_name))].join(', ')}). Create a separate invoice for each stream.
+              </p>
+            )}
             {createError && <p className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl p-3">{createError}</p>}
 
             <div className="flex justify-end">

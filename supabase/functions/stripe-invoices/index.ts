@@ -95,6 +95,8 @@ async function createInvoice(body: any, caller: AppUser) {
       return json({ error: `${bal.project_name}: $${amount.toFixed(2)} is more than the $${Number(bal.remaining).toFixed(2)} left to invoice` }, 400);
     }
   }
+  const streams = new Set(lines.map((l) => Number((byProject.get(Number(l.project_id)) as any).income_stream_id)));
+  if (streams.size > 1) return json({ error: 'All projects on one invoice must be in the same income stream' }, 400);
   const totalCents = lines.reduce((s, l) => s + toCents(Number(l.amount)), 0);
 
   if (email && email !== client.email) await db.from('clients').update({ email }).eq('id', client.id);

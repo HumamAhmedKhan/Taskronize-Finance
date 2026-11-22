@@ -59,7 +59,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
   const [revenues, setRevenues] = useState<Revenue[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [allocations, setAllocations] = useState<ProjectAllocation[]>([]);
-  const [allLinks, setAllLinks] = useState<{ project_id: number; revenue_id: number }[]>([]);
+  const [allLinks, setAllLinks] = useState<{ project_id: number; revenue_id: number; amount: number | null }[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [paymentRows, setPaymentRows] = useState<any[]>([]);
   const [otherPayments, setOtherPayments] = useState<any[]>([]);
@@ -89,7 +89,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         supabase.from('projects').select('*').gte('date', globalStart).lte('date', globalEnd).order('date', { ascending: false }).order('created_at', { ascending: false }),
         db.get<IncomeStream>('income_streams'),
         db.get<Revenue>('revenues'),
-        supabase.from('project_revenue_links').select('project_id, revenue_id'),
+        supabase.from('project_revenue_links').select('project_id, revenue_id, amount'),
         db.get<TeamMember>('team_members'),
         db.get<ProjectAllocation>('project_allocations'),
         db.get<any>('production_payments'),
@@ -384,17 +384,22 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
     return ids;
   }, [payments]);
 
+  // A link's `amount` is this project's share of a revenue shared across projects; null means the whole revenue.
+  const paidForProject = (projectId: number) =>
+    allLinks.filter(l => l.project_id === projectId).reduce((s, l) => {
+      if (l.amount != null) return s + Number(l.amount);
+      return s + Number(revenues.find(r => r.id === l.revenue_id)?.total_sale || 0);
+    }, 0);
+
   const pipelineStats = useMemo(() => {
     const totalValue = projects.reduce((sum, p) => sum + Number(p.project_value || 0), 0);
     const realizedValue = projects.reduce((sum, p) => {
-      const linkedRevIds = allLinks.filter(l => l.project_id === p.id).map(l => l.revenue_id);
-      const linkedVal = revenues.filter(r => linkedRevIds.includes(r.id)).reduce((s, r) => s + Number(r.total_sale), 0);
+      const linkedVal = paidForProject(p.id);
       return sum + Math.min(linkedVal, Number(p.project_value)); // Cap at project value
     }, 0);
     const realizationRate = totalValue > 0 ? (realizedValue / totalValue) * 100 : 0;
     const settledCount = projects.filter(p => {
-        const linkedRevIds = allLinks.filter(l => l.project_id === p.id).map(l => l.revenue_id);
-        const linkedVal = revenues.filter(r => linkedRevIds.includes(r.id)).reduce((s, r) => s + Number(r.total_sale), 0);
+        const linkedVal = paidForProject(p.id);
         return linkedVal >= Number(p.project_value) * 0.99; // 1% tolerance
     }).length;
     return { totalValue, realizedValue, realizationRate, settledCount };
@@ -426,8 +431,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
 
   // Mobile: how much of each project's value is covered by linked revenue (same rule as the desktop STATUS column)
   const projectCollection = (p: Project) => {
-    const linkedRevIds = allLinks.filter(l => l.project_id === p.id).map(l => l.revenue_id);
-    const linkedVal = revenues.filter(r => linkedRevIds.includes(r.id)).reduce((sum, r) => sum + Number(r.total_sale), 0);
+    const linkedVal = paidForProject(p.id);
     const percent = p.project_value > 0 ? Math.min(100, (linkedVal / p.project_value) * 100) : 0;
     const isFull = linkedVal >= p.project_value * 0.99;
     return { linkedVal, percent, isFull };
@@ -635,8 +639,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
               }
             ] : []),
             { header: 'STATUS', render: (p) => {
-              const linkedRevIds = allLinks.filter(l => l.project_id === p.id).map(l => l.revenue_id);
-              const linkedVal = revenues.filter(r => linkedRevIds.includes(r.id)).reduce((s, r) => s + Number(r.total_sale), 0);
+              const linkedVal = paidForProject(p.id);
               const percent = p.project_value > 0 ? (linkedVal / p.project_value) * 100 : 0;
               const isFull = linkedVal >= p.project_value * 0.99; // 1% tolerance for float logic
 

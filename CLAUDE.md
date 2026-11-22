@@ -91,7 +91,9 @@ Flags: `brief_generated` (bool), `folders_creating` (bool)
 - `clients` table; `projects.client_id` links projects. Trigger `a_projects_sync_client` links/creates clients from `client_name` on any save; renaming a client syncs project names.
 - Income streams with `stripe_invoicing = true` are invoiceable. `project_invoice_balances(client_id)` gives value/paid/open-invoiced/remaining per project.
 - `invoices` + `invoice_lines` are written only by the `stripe-invoices` edge function (service role); browser can only read them.
-- Paid invoices → `record_invoice_payment()` creates one revenue per line + `project_revenue_links` (idempotent). Called by `stripe-webhook` and the "Check payment" button.
+- Paid invoices → `record_invoice_payment()` → `create_invoice_revenue()` creates ONE revenue for the invoice total, linked to each project with its share in `project_revenue_links.amount` (idempotent). Called by `stripe-webhook` and the "Check payment" button.
+- `project_revenue_links.amount` = that project's share of a shared revenue; NULL = whole revenue (manual links). Per-project "paid" must use `coalesce(link.amount, revenue.total_sale)`.
+- One invoice = one income stream (enforced in UI and edge function).
 - Secrets in Supabase Edge Function secrets: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`. Never put Stripe keys in Vite/`VITE_` env.
 - Permission key `invoices` covers the Invoices page and its Clients tab.
 
