@@ -31,6 +31,7 @@ const UsersView: React.FC = () => {
       backup: 'none',
       aiAdvisor: 'none',
       withdrawals: 'none',
+      invoices: 'none',
       pmBulkEdit: 'none',
       pmManageStatuses: 'none',
       tasks: 'none'
@@ -80,6 +81,7 @@ const UsersView: React.FC = () => {
           backup: 'none',
           aiAdvisor: 'none',
           withdrawals: 'none',
+      invoices: 'none',
           tasks: 'none'
         };
       }
@@ -129,6 +131,7 @@ const UsersView: React.FC = () => {
           backup: 'none',
           aiAdvisor: 'none',
           withdrawals: 'none',
+      invoices: 'none',
           tasks: 'none'
         }),
         [page]: level
@@ -147,7 +150,7 @@ const UsersView: React.FC = () => {
   // Helper to ensure all possible permission keys are rendered even if missing in existing user objects
   const permissionKeys: (keyof PagePermissions)[] = [
     'dashboard', 'aiAdvisor', 'revenue', 'projects', 'projectManagement', 'payments',
-    'expenses', 'incomeStreams', 'team', 'users', 'monthlyClosing', 'backup', 'withdrawals', 'tasks'
+    'expenses', 'incomeStreams', 'team', 'users', 'monthlyClosing', 'backup', 'withdrawals', 'tasks', 'invoices'
   ];
 
   const pmFeatureKeys: (keyof PagePermissions)[] = ['pmBulkEdit', 'pmManageStatuses'];
@@ -175,7 +178,8 @@ const UsersView: React.FC = () => {
               name: '', username: '', user_type: 'team_member', linked_income_stream_ids: [], permissions: {
                 dashboard: 'full', revenue: 'none', payments: 'none', expenses: 'none',
                 projects: 'none', projectManagement: 'none', incomeStreams: 'none', team: 'none', users: 'none',
-                monthlyClosing: 'none', backup: 'none', aiAdvisor: 'none', withdrawals: 'none', tasks: 'none'
+                monthlyClosing: 'none', backup: 'none', aiAdvisor: 'none', withdrawals: 'none',
+      invoices: 'none', tasks: 'none'
               }
             });
             setResetPassword('');

@@ -12,8 +12,8 @@ export const loginEmail = (username: string) => `${username.trim().toLowerCase()
 export const USERNAME_PATTERN = /^[A-Za-z0-9._-]{2,40}$/;
 
 // Creating users and setting other users' passwords needs admin rights, so it runs server-side.
-export const adminUsers = async (payload: Record<string, unknown>) => {
-  const { data, error } = await supabase.functions.invoke('admin-users', { body: payload });
+const invokeFunction = async (name: string, payload: Record<string, unknown>) => {
+  const { data, error } = await supabase.functions.invoke(name, { body: payload });
   if (error) {
     let message = error.message;
     try { message = (await (error as any).context.json()).error ?? message; } catch {}
@@ -21,6 +21,11 @@ export const adminUsers = async (payload: Record<string, unknown>) => {
   }
   return data;
 };
+
+export const adminUsers = (payload: Record<string, unknown>) => invokeFunction('admin-users', payload);
+
+// Stripe calls run server-side so the Stripe key never reaches the browser.
+export const stripeInvoices = (payload: Record<string, unknown>) => invokeFunction('stripe-invoices', payload);
 
 // Helper for database operations with safe generic syntax
 export const db = {

@@ -97,7 +97,7 @@ const IncomeStreamsView: React.FC = () => {
         {auth?.canAccess('incomeStreams') && (
           <button 
             onClick={() => {
-              setFormData({ name: '', platform: '', platform_fee_percent: 0, commission_structure: [], is_active: true });
+              setFormData({ name: '', platform: '', platform_fee_percent: 0, commission_structure: [], is_active: true, stripe_invoicing: false });
               setShowModal(true);
             }}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-blue-500/20 font-bold"
@@ -126,7 +126,10 @@ const IncomeStreamsView: React.FC = () => {
                 </button>
               </div>
               <h3 className="text-xl font-bold text-slate-800">{stream.name}</h3>
-              <p className="text-sm text-slate-500 mb-6">{stream.platform}</p>
+              <p className="text-sm text-slate-500 mb-6">
+                {stream.platform}
+                {stream.stripe_invoicing && <span className="ml-2 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-md text-[10px] font-bold uppercase tracking-wider">Stripe invoicing</span>}
+              </p>
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                   <p className="text-[10px] font-bold text-slate-400 uppercase">Platform Fee</p>
@@ -164,6 +167,13 @@ const IncomeStreamsView: React.FC = () => {
             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Platform Service Fee (%)</label>
             <input type="number" step="0.01" required value={formData.platform_fee_percent} onChange={e => setFormData({...formData, platform_fee_percent: parseFloat(e.target.value)})} className="w-full px-4 py-2 border rounded-xl font-bold" />
           </div>
+          <label className="flex items-start gap-3 p-4 bg-indigo-50 border border-indigo-100 rounded-xl cursor-pointer">
+            <input type="checkbox" checked={!!formData.stripe_invoicing} onChange={e => setFormData({...formData, stripe_invoicing: e.target.checked})} className="mt-0.5 w-4 h-4" />
+            <span>
+              <span className="block text-sm font-bold text-slate-800">Invoice through Stripe</span>
+              <span className="block text-xs text-slate-500">Projects in this stream appear on the Invoices page. Paid invoices create revenue entries using this stream's platform fee.</span>
+            </span>
+          </label>
 
           <div className="space-y-4 pt-4 border-t border-slate-100">
             <div className="flex items-center justify-between">

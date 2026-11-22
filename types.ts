@@ -20,6 +20,7 @@ export interface PagePermissions {
   pmBulkEdit: PermissionLevel;
   pmManageStatuses: PermissionLevel;
   tasks: PermissionLevel;
+  invoices: PermissionLevel;
 }
 
 export interface User {
@@ -54,7 +55,56 @@ export interface IncomeStream {
   platform_fee_percent: number;
   commission_structure: any[];
   is_active: boolean;
+  stripe_invoicing: boolean;
   created_at: string;
+}
+
+export interface Client {
+  id: number;
+  name: string;
+  email: string | null;
+  company: string | null;
+  stripe_customer_id: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface Invoice {
+  id: number;
+  client_id: number;
+  status: 'creating' | 'open' | 'paid' | 'void' | 'failed';
+  currency: string;
+  total: number;
+  due_date: string | null;
+  mirjan_involved: boolean;
+  stripe_invoice_id: string | null;
+  stripe_invoice_number: string | null;
+  hosted_invoice_url: string | null;
+  created_by: number | null;
+  created_at: string;
+  paid_at: string | null;
+  error: string | null;
+}
+
+export interface InvoiceLine {
+  id: number;
+  invoice_id: number;
+  project_id: number;
+  description: string;
+  amount: number;
+  revenue_id: number | null;
+}
+
+export interface ProjectInvoiceBalance {
+  project_id: number;
+  project_name: string;
+  project_value: number;
+  paid: number;
+  open_invoiced: number;
+  remaining: number;
+  installments_so_far: number;
+  income_stream_id: number;
+  stream_name: string;
 }
 
 export interface Revenue {
@@ -74,6 +124,7 @@ export interface Project {
   date: string;
   project_name: string;
   client_name: string;
+  client_id: number | null;
   income_stream_id: number | null;
   project_description: string | null;
   project_value: number;

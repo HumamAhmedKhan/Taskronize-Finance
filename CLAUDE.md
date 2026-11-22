@@ -83,6 +83,18 @@ Flags: `brief_generated` (bool), `folders_creating` (bool)
 - Generate Brief: POST to `https://hook.us2.make.com/lsd7rvtt6h3kr598ntwtzda5vojtbt8l` → re-fetch project row from Supabase (do NOT optimistic update)
 - Subtasks have `start_date`, `due_date`, `assignee_id` in JSONB array
 
+## Database Security
+- Every table has RLS. New tables MUST get RLS + an `active_members_all` policy using `public.is_active_member()` (or read-only if written server-side), or they are exposed.
+- Anonymous (`anon`) access is revoked on all tables.
+
+## Clients & Stripe Invoicing
+- `clients` table; `projects.client_id` links projects. Trigger `a_projects_sync_client` links/creates clients from `client_name` on any save; renaming a client syncs project names.
+- Income streams with `stripe_invoicing = true` are invoiceable. `project_invoice_balances(client_id)` gives value/paid/open-invoiced/remaining per project.
+- `invoices` + `invoice_lines` are written only by the `stripe-invoices` edge function (service role); browser can only read them.
+- Paid invoices → `record_invoice_payment()` creates one revenue per line + `project_revenue_links` (idempotent). Called by `stripe-webhook` and the "Check payment" button.
+- Secrets in Supabase Edge Function secrets: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`. Never put Stripe keys in Vite/`VITE_` env.
+- Permission key `invoices` covers the Invoices page and its Clients tab.
+
 ## File Map
 ```
 App.tsx                        # Auth, routing, global date state, AuthContext
@@ -97,6 +109,8 @@ views/
   ExpensesView.tsx
   TeamView.tsx
   UsersView.tsx                # User accounts + Access Matrix modal
+  InvoicesView.tsx             # Stripe invoices + Clients tab
+supabase/functions/            # Edge functions: admin-users, stripe-invoices, stripe-webhook, send-slack
 ```
 
 ## Current Work
@@ -115,3 +129,4 @@ views/
 - Tab redirect on login must also run on page reload (useEffect) — not just in login().
 - Hidden md:hidden blocks still get space-y margin; add md:!mt-0 to first desktop block.
 - Await supabase.auth.signOut() before clearing user; fast reloads otherwise restore session.
+- Projects INSERT fires a Make.com webhook; disable trigger "taskronize-crm" for test inserts.

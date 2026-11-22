@@ -34,6 +34,10 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
   const [projects, setProjects] = useState<Project[]>([]);
   const [mobileFilter, setMobileFilter] = useState<'all' | 'awaiting' | 'paid'>('all');
   const [streams, setStreams] = useState<IncomeStream[]>([]);
+  const [clientNames, setClientNames] = useState<string[]>([]);
+  useEffect(() => {
+    supabase.from('clients').select('name').order('name').then(({ data }) => setClientNames((data || []).map(c => c.name)));
+  }, []);
   const [revenues, setRevenues] = useState<Revenue[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [allocations, setAllocations] = useState<ProjectAllocation[]>([]);
@@ -627,7 +631,13 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Client</label>
-              <input type="text" value={formData.client_name} onChange={e => setFormData({...formData, client_name: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold" />
+              <input type="text" list="project-client-options" value={formData.client_name} onChange={e => setFormData({...formData, client_name: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold" placeholder="Start typing a client..." />
+              <datalist id="project-client-options">
+                {clientNames.map(name => <option key={name} value={name} />)}
+              </datalist>
+              {formData.client_name?.trim() && !clientNames.some(n => n.toLowerCase() === formData.client_name!.trim().replace(/\s+/g, ' ').toLowerCase()) && (
+                <p className="text-[11px] font-semibold text-amber-600">New client — check the spelling, or pick an existing one from the list.</p>
+              )}
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Revenue Stream</label>
