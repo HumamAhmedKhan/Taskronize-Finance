@@ -65,6 +65,8 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
   const [otherPayments, setOtherPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  // The search the stats strip describes; set when Enter is pressed, hidden again once the text changes.
+  const [committedSearch, setCommittedSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   
@@ -131,6 +133,13 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
   useEffect(() => { loadData(); }, [globalStart, globalEnd]);
 
   const clearSelection = () => { setSelectedProjectIds([]); setTableKey(k => k + 1); };
+  // Drop selections for projects no longer loaded (e.g. outside a new date range or deleted).
+  useEffect(() => {
+    setSelectedProjectIds(prev => {
+      const next = prev.filter(id => projects.some(p => p.id === id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [projects]);
 
   const handleBulkSave = async () => {
     const ids = selectedProjectIds;
@@ -191,6 +200,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
     if (notInvoiceable.length) {
       return alert(`These projects are not in an income stream set up for Stripe invoicing:\n${notInvoiceable.map(p => '• ' + p.project_name).join('\n')}`);
     }
+    if (new Set(sel.map(p => p.income_stream_id)).size > 1) return alert('Select projects from a single income stream to create one invoice.');
     try {
       sessionStorage.setItem('invoiceDraft', JSON.stringify({ client_id: sel[0].client_id, project_ids: sel.map(p => p.id) }));
     } catch {}
@@ -407,6 +417,33 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
 
+  // Search matches project name, client, income stream and assigned team members.
+  const matchesSearch = (p: Project, term: string) => {
+    const q = term.trim().toLowerCase();
+    if (!q) return true;
+    if ((p.project_name || '').toLowerCase().includes(q) || (p.client_name || '').toLowerCase().includes(q)) return true;
+    const stream = streams.find(st => st.id === p.income_stream_id);
+    if (stream && stream.name.toLowerCase().includes(q)) return true;
+    return allocations.some(a => a.project_id === p.id &&
+      (teamMembers.find(m => m.id === a.team_member_id)?.name || '').toLowerCase().includes(q));
+  };
+
+  // Totals for any set of projects (search results, selection). Paid is capped at value, like Realized Revenue.
+  const statsFor = (list: Project[]) => {
+    let value = 0, paid = 0, cost = 0;
+    const clientKeys = new Set<string>();
+    const streamIds = new Set<number | null>();
+    list.forEach(p => {
+      const v = Number(p.project_value || 0);
+      value += v;
+      paid += Math.min(paidForProject(p.id), v);
+      cost += allocations.filter(a => a.project_id === p.id).reduce((sum, a) => sum + Number(a.amount), 0);
+      clientKeys.add(p.client_id ? `id:${p.client_id}` : `name:${(p.client_name || '').trim().toLowerCase()}`);
+      streamIds.add(p.income_stream_id ?? null);
+    });
+    return { count: list.length, value, paid, unpaid: value - paid, cost, margin: value - cost, clients: clientKeys.size, streams: streamIds.size };
+  };
+
   const getInitials = (name: string) => name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
   
   const getAvatarColor = (name: string) => {
@@ -437,13 +474,84 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
     return { linkedVal, percent, isFull };
   };
   const canCreateProject = !currentUser || currentUser.user_type === 'admin' || currentUser.user_type === 'partner';
-  const mobileProjects = projects
-    .filter(p => p.project_name.toLowerCase().includes(searchTerm.toLowerCase()) || p.client_name.toLowerCase().includes(searchTerm.toLowerCase()))
+  const searchedProjects = projects.filter(p => matchesSearch(p, searchTerm));
+  const mobileProjects = searchedProjects
     .filter(p => {
       if (mobileFilter === 'all') return true;
       const { isFull } = projectCollection(p);
       return mobileFilter === 'paid' ? isFull : !isFull;
     });
+
+  // Search strip: shown after Enter, for the rows that search produced on each layout.
+  const showSearchStrip = !!committedSearch && committedSearch === searchTerm.trim();
+  const desktopSearchStats = statsFor(searchedProjects);
+  const mobileSearchStats = statsFor(mobileProjects);
+  const commitSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    setCommittedSearch(searchTerm.trim());
+    if (window.matchMedia('(max-width: 767px)').matches) (e.target as HTMLInputElement).blur();
+  };
+  const clearSearch = () => { setSearchTerm(''); setCommittedSearch(''); };
+  const renderSearchStrip = (st: ReturnType<typeof statsFor>, total: number, compact: boolean) => (
+    <section aria-label="Search results summary" className={compact ? 'bg-indigo-50 border border-indigo-100 rounded-2xl p-4 space-y-3' : 'bg-indigo-50/60 border border-indigo-100 rounded-3xl px-8 py-5 flex flex-wrap items-center gap-x-10 gap-y-3'}>
+      <div className="flex items-center justify-between gap-3 min-w-0">
+        <p className={`${compact ? 'text-[13px]' : 'text-sm'} font-semibold text-indigo-900 min-w-0`}>
+          <span className="tabular-nums">{st.count}</span> of <span className="tabular-nums">{total}</span> projects match “<span className="break-all">{committedSearch}</span>”
+        </p>
+        {compact && <button onClick={clearSearch} className="shrink-0 text-[13px] font-medium text-indigo-700">Clear</button>}
+      </div>
+      <dl className={compact ? 'grid grid-cols-3 gap-x-3 gap-y-2' : 'flex flex-wrap gap-x-8 gap-y-2'}>
+        {[
+          ['Value', formatCurrency(st.value), 'text-gray-900'],
+          ['Paid', formatCurrency(st.paid), 'text-emerald-700'],
+          ['Unpaid', formatCurrency(st.unpaid), 'text-orange-700'],
+          ['Production cost', formatCurrency(st.cost), 'text-gray-900'],
+          ['Margin', formatCurrency(st.margin), st.margin < 0 ? 'text-rose-700' : 'text-gray-900'],
+          ['Clients', String(st.clients), 'text-gray-900'],
+        ].map(([label, value, cls]) => (
+          <div key={label} className="min-w-0">
+            <dt className="text-[10px] font-bold uppercase tracking-widest text-indigo-400 whitespace-nowrap">{label}</dt>
+            <dd className={`text-sm font-black tabular-nums whitespace-nowrap ${cls}`}>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {!compact && <button onClick={clearSearch} className="ml-auto text-xs font-bold text-indigo-700 hover:text-indigo-900">Clear search</button>}
+    </section>
+  );
+
+  // Selection bar: live totals, plus warnings the user can't otherwise see.
+  const isMobileLayout = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
+  const selectedProjects = projects.filter(p => selectedProjectIds.includes(p.id));
+  const selectionStats = statsFor(selectedProjects);
+  const shownList = isMobileLayout() ? mobileProjects : searchedProjects;
+  const hiddenSelectedCount = selectedProjects.filter(p => !shownList.some(v => v.id === p.id)).length;
+  const selectionNotes: string[] = [];
+  if (hiddenSelectedCount > 0) selectionNotes.push(`${hiddenSelectedCount} selected ${hiddenSelectedCount === 1 ? 'is' : 'are'} hidden by the filter — bulk edit still changes ${hiddenSelectedCount === 1 ? 'it' : 'them'}.`);
+  if (auth?.canAccess('invoices') && selectedProjects.length > 0) {
+    const notInvoiceable = selectedProjects.filter(p => !streams.find(st => st.id === p.income_stream_id)?.stripe_invoicing).length;
+    const blockers = [
+      selectionStats.clients > 1 && `${selectionStats.clients} clients`,
+      selectionStats.streams > 1 && `${selectionStats.streams} income streams`,
+      notInvoiceable > 0 && `${notInvoiceable} not in a Stripe stream`,
+    ].filter(Boolean);
+    if (blockers.length) selectionNotes.push(`Can't be one invoice: ${blockers.join(' · ')}.`);
+  }
+  const selectionBarStats = [
+    { label: 'Value', value: formatCurrency(selectionStats.value) },
+    { label: 'Paid', value: formatCurrency(selectionStats.paid), tone: 'good' as const },
+    { label: 'Unpaid', value: formatCurrency(selectionStats.unpaid) },
+    { label: 'Prod. cost', value: formatCurrency(selectionStats.cost) },
+    { label: 'Margin', value: formatCurrency(selectionStats.margin), tone: selectionStats.margin < 0 ? 'bad' as const : undefined },
+    { label: 'Clients · streams', value: `${selectionStats.clients} · ${selectionStats.streams}` },
+  ];
+  const toggleProjectSelected = (id: number) =>
+    setSelectedProjectIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const allMobileSelected = mobileProjects.length > 0 && mobileProjects.every(p => selectedProjectIds.includes(p.id));
+  const toggleAllMobile = () => setSelectedProjectIds(prev => allMobileSelected
+    ? prev.filter(id => !mobileProjects.some(p => p.id === id))
+    : [...prev, ...mobileProjects.map(p => p.id).filter(id => !prev.includes(id))]);
+  const rowNumber = new Map(searchedProjects.map((p, i) => [p.id, i + 1]));
 
   return (
     <div className="space-y-8 pb-32 animate-in fade-in">
@@ -470,7 +578,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
           <label className="flex-1 flex items-center gap-2 h-11 px-3 rounded-xl bg-white border border-gray-200 text-gray-500">
             <Search size={18} />
             <span className="sr-only">Filter projects</span>
-            <input type="search" placeholder="Filter projects" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="flex-1 min-w-0 bg-transparent outline-none text-[15px] text-gray-900 placeholder:text-gray-400" />
+            <input type="search" enterKeyHint="search" placeholder="Filter projects" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onKeyDown={commitSearch} className="flex-1 min-w-0 bg-transparent outline-none text-[15px] text-gray-900 placeholder:text-gray-400" />
           </label>
           {(!currentUser || currentUser.user_type === 'admin') && (
             <button onClick={() => setShowImportModal(true)} aria-label="Bulk AI import" className="w-11 h-11 shrink-0 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-indigo-600">
@@ -492,6 +600,15 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
           ))}
         </div>
 
+        {showSearchStrip && renderSearchStrip(mobileSearchStats, projects.length, true)}
+
+        {canBulkEdit && mobileProjects.length > 0 && (
+          <label className="flex items-center gap-2.5 px-1 text-[13px] font-medium text-gray-700">
+            <input type="checkbox" checked={allMobileSelected} onChange={toggleAllMobile} className="w-5 h-5 rounded border-gray-300" />
+            Select all {mobileProjects.length} shown
+          </label>
+        )}
+
         <ul className="space-y-2.5">
           {mobileProjects.map(p => {
             const { linkedVal, percent, isFull } = projectCollection(p);
@@ -500,8 +617,14 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
             const cost = projAllocs.reduce((sum, a) => sum + Number(a.amount), 0);
             const barColor = isFull ? 'bg-emerald-700' : linkedVal > 0 ? 'bg-indigo-600' : 'bg-transparent';
             return (
-              <li key={p.id}>
-                <button onClick={() => handleEdit(p)} className="w-full text-left bg-white rounded-2xl border border-gray-200 p-4 space-y-2.5 active:bg-gray-50">
+              <li key={p.id} className="flex items-stretch gap-2">
+                {canBulkEdit && (
+                  <label className="shrink-0 flex items-start pt-4 pl-1 pr-1">
+                    <span className="sr-only">Select {p.project_name}</span>
+                    <input type="checkbox" checked={selectedProjectIds.includes(p.id)} onChange={() => toggleProjectSelected(p.id)} className="w-5 h-5 rounded border-gray-300" />
+                  </label>
+                )}
+                <button onClick={() => handleEdit(p)} className={`flex-1 min-w-0 text-left bg-white rounded-2xl border p-4 space-y-2.5 active:bg-gray-50 ${selectedProjectIds.includes(p.id) ? 'border-indigo-400 ring-1 ring-indigo-400' : 'border-gray-200'}`}>
                   <div className="flex items-start justify-between gap-3">
                     <span className="min-w-0 text-[15px] font-semibold text-gray-900 leading-snug line-clamp-2">{p.project_name}</span>
                     <span className="shrink-0 text-[15px] font-semibold text-gray-900">{formatCurrency(p.project_value)}</span>
@@ -529,7 +652,7 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
           )}
         </ul>
 
-        {canCreateProject && (
+        {canCreateProject && selectedProjectIds.length === 0 && (
           <button
             onClick={() => { setFormData(initialForm); setFormAllocations([]); setFormLinks([]); setEditingId(null); setShowModal(true); }}
             aria-label="New project"
@@ -569,11 +692,13 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         </div>
       </div>
 
+      {showSearchStrip && renderSearchStrip(desktopSearchStats, projects.length, false)}
+
       <div className="bg-white border border-gray-200 rounded-[32px] shadow-sm overflow-hidden">
         <header className="px-8 py-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/10">
           <div className="relative w-80">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
-            <input type="text" placeholder="Filter projects..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-gray-100 transition-all outline-none" />
+            <input type="text" enterKeyHint="search" placeholder="Filter projects... (Enter for totals)" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onKeyDown={commitSearch} className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-gray-100 transition-all outline-none" />
           </div>
           <div className="flex gap-3">
             {(!currentUser || currentUser.user_type === 'admin') && (
@@ -591,10 +716,13 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         <Table<Project>
           key={tableKey}
           selectable={canBulkEdit}
+          selectedIds={selectedProjectIds.map(String)}
           onSelectionChange={(ids) => setSelectedProjectIds(ids.map(Number))}
-          data={projects.filter(p => p.project_name.toLowerCase().includes(searchTerm.toLowerCase()) || p.client_name.toLowerCase().includes(searchTerm.toLowerCase()))}
+          data={searchedProjects}
+          emptyMessage={searchTerm.trim() ? `No projects match “${searchTerm.trim()}”` : 'No records found'}
           rowKey={(p) => String(p.id)}
           columns={[
+            { header: '#', className: 'w-10', render: (p) => <span className="text-xs font-bold text-gray-300 tabular-nums">{rowNumber.get(p.id)}</span> },
             { header: 'DATE', render: (p) => <span className="text-xs font-bold text-gray-400">{p.date}</span> },
             { header: 'PROJECT NAME', render: (p) => <span className="font-black text-gray-900 text-sm">{p.project_name}</span> },
             { header: 'CLIENT', render: (p) => <span className="text-xs font-bold text-gray-500">{p.client_name}</span> },
@@ -1038,6 +1166,8 @@ const ProjectsView: React.FC<ProjectsViewProps> = ({ globalStart, globalEnd, cur
         <BulkActionBar
           selectedCount={selectedProjectIds.length}
           onClearSelection={clearSelection}
+          stats={selectionBarStats}
+          notes={selectionNotes}
           actions={[
             { label: 'Bulk edit', icon: <Layers size={16} />, onClick: () => { setBulkFields(emptyBulkFields); setShowBulkModal(true); }, variant: 'primary' },
             ...(auth?.canAccess('invoices') ? [{ label: 'Create invoice', icon: <Receipt size={16} />, onClick: handleInvoiceSelection }] : []),
