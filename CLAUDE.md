@@ -132,3 +132,4 @@ supabase/functions/            # Edge functions: admin-users, stripe-invoices, s
 - Hidden md:hidden blocks still get space-y margin; add md:!mt-0 to first desktop block.
 - Await supabase.auth.signOut() before clearing user; fast reloads otherwise restore session.
 - Projects INSERT fires a Make.com webhook; disable trigger "taskronize-crm" for test inserts.
+- Tailwind comes from a CDN; for container screenshots, build CSS locally with tailwindcss@3.

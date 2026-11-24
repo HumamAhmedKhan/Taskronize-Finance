@@ -17,6 +17,8 @@ interface TableProps<T> {
   emptyMessage?: string;
   selectable?: boolean;
   onSelectionChange?: (selectedIds: (string | number)[]) => void;
+  /** Controlled selection. When given, the parent owns which rows are ticked (rows hidden by a filter can stay ticked). */
+  selectedIds?: (string | number)[];
 }
 
 function Table<T>({ 
@@ -26,11 +28,14 @@ function Table<T>({
   onRowClick, 
   emptyMessage = 'No records found',
   selectable = false,
-  onSelectionChange
+  onSelectionChange,
+  selectedIds: controlledSelectedIds
 }: TableProps<T>) {
   const [sortColumn, setSortColumn] = useState<keyof T | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [selectedIds, setSelectedIds] = useState<(string | number)[]>([]);
+  const [internalSelectedIds, setInternalSelectedIds] = useState<(string | number)[]>([]);
+  const selectedIds = controlledSelectedIds ?? internalSelectedIds;
+  const setSelectedIds = (ids: (string | number)[]) => { if (!controlledSelectedIds) setInternalSelectedIds(ids); };
 
   const handleSort = (accessor: keyof T) => {
     if (sortColumn === accessor) {
@@ -41,8 +46,13 @@ function Table<T>({
     }
   };
 
+  // Select-all works on the rows currently shown; ticked rows hidden by a filter are kept.
+  const visibleIds = data.map(row => rowKey(row));
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.includes(id));
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const ids = e.target.checked ? data.map(row => rowKey(row)) : [];
+    const ids = e.target.checked
+      ? [...selectedIds, ...visibleIds.filter(id => !selectedIds.includes(id))]
+      : selectedIds.filter(id => !visibleIds.includes(id));
     setSelectedIds(ids);
     onSelectionChange?.(ids);
   };
@@ -154,7 +164,7 @@ function Table<T>({
                     type="checkbox" 
                     className="w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900 cursor-pointer"
                     onChange={handleSelectAll}
-                    checked={selectedIds.length === data.length && data.length > 0}
+                    checked={allVisibleSelected}
                   />
                 </th>
               )}

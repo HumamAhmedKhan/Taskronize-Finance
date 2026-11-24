@@ -64,8 +64,10 @@ const InvoicesView: React.FC = () => {
   const [client, setClient] = useState<Client | null>(null);
   const [balances, setBalances] = useState<ProjectInvoiceBalance[]>([]);
   const [showDone, setShowDone] = useState(false);
+  const [projectSearch, setProjectSearch] = useState('');
   const doneCount = balances.filter(b => b.remaining <= 0).length;
-  const visibleBalances = showDone ? balances : balances.filter(b => b.remaining > 0);
+  const visibleBalances = (showDone ? balances : balances.filter(b => b.remaining > 0))
+    .filter(b => !projectSearch.trim() || `${b.project_name} ${b.stream_name}`.toLowerCase().includes(projectSearch.trim().toLowerCase()));
   const [selected, setSelected] = useState<Record<number, DraftLine>>({});
   const [email, setEmail] = useState('');
   const [mirjanInvolved, setMirjanInvolved] = useState(false);
@@ -124,6 +126,7 @@ const InvoicesView: React.FC = () => {
     setEmail(c.email || '');
     setSelected({});
     setShowDone(false);
+    setProjectSearch('');
     const { data, error } = await supabase.rpc('project_invoice_balances', { p_client_id: c.id });
     if (error) { showToast(`Could not load projects: ${error.message}`, 'error'); return; }
     const loaded: ProjectInvoiceBalance[] = (data || []).map((b: any) => ({ ...b, project_value: Number(b.project_value), paid: Number(b.paid), open_invoiced: Number(b.open_invoiced), remaining: Number(b.remaining) }));
@@ -164,6 +167,18 @@ const InvoicesView: React.FC = () => {
   };
 
   const selectedBalances = balances.filter(b => selected[b.project_id]);
+  const selectedTotals = selectedBalances.reduce((t, b) => ({
+    value: t.value + b.project_value, paid: t.paid + b.paid, openInvoiced: t.openInvoiced + b.open_invoiced, remaining: t.remaining + b.remaining,
+  }), { value: 0, paid: 0, openInvoiced: 0, remaining: 0 });
+  const selectedStreamCount = new Set(selectedBalances.map(b => b.stream_name)).size;
+  const selectableShown = visibleBalances.filter(b => b.remaining > 0);
+  const allShownSelected = selectableShown.length > 0 && selectableShown.every(b => selected[b.project_id]);
+  const toggleAllShown = () => setSelected(prev => {
+    const next = { ...prev };
+    if (allShownSelected) selectableShown.forEach(b => { delete next[b.project_id]; });
+    else selectableShown.forEach(b => { if (!next[b.project_id]) next[b.project_id] = draftLine(b); });
+    return next;
+  });
   const lineErrors = useMemo(() => {
     const errs: Record<number, string> = {};
     selectedBalances.forEach(b => {
@@ -302,38 +317,56 @@ const InvoicesView: React.FC = () => {
         )}
 
         {step === 'projects' && (
-          <div className="space-y-4">
-            {balances.length === 0 ? (
-              <p className="text-sm text-slate-600 bg-amber-50 border border-amber-100 rounded-xl p-4">
-                {client?.name} has no projects in an income stream set up for Stripe invoicing. On the Income Streams page, edit the stream and tick “Invoice through Stripe”.
-              </p>
-            ) : visibleBalances.length === 0 ? (
+          balances.length === 0 ? (
+            <p className="text-sm text-slate-600 bg-amber-50 border border-amber-100 rounded-xl p-4">
+              {client?.name} has no projects in an income stream set up for Stripe invoicing. On the Income Streams page, edit the stream and tick “Invoice through Stripe”.
+            </p>
+          ) : (
+          // Sized to the screen: only the table scrolls, the stats + button footer stays visible.
+          // Phones: the page scrolls and the footer sticks above the bottom nav instead.
+          <div className="flex flex-col gap-3 md:max-h-[calc(100vh-18rem)] md:min-h-[22rem]">
+            <div className="flex flex-wrap items-center gap-3 shrink-0">
+              <div className="relative flex-1 min-w-[12rem] max-w-sm">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input value={projectSearch} onChange={e => setProjectSearch(e.target.value)} placeholder="Filter projects..." className="w-full pl-8 pr-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20" />
+              </div>
+              <span className="text-xs text-slate-500 tabular-nums">{visibleBalances.length} shown</span>
+              {doneCount > 0 && (
+                <button type="button" onClick={() => setShowDone(v => !v)} className="ml-auto text-xs font-semibold text-slate-500 hover:text-slate-800">
+                  {showDone ? 'Hide' : 'Show'} {doneCount} fully paid or already invoiced
+                </button>
+              )}
+            </div>
+
+            {visibleBalances.length === 0 ? (
               <p className="text-sm text-slate-600 bg-slate-50 border border-slate-100 rounded-xl p-4">
-                Every project for {client?.name} is already paid or fully invoiced — nothing left to bill.
+                {projectSearch.trim() ? `No projects match “${projectSearch.trim()}”.` : `Every project for ${client?.name} is already paid or fully invoiced — nothing left to bill.`}
               </p>
             ) : (
-              <div className="overflow-x-auto border border-slate-100 rounded-xl">
+              <div className="overflow-x-auto md:flex-1 md:min-h-0 md:overflow-auto border border-slate-100 rounded-xl">
                 <table className="w-full text-sm">
-                  <thead className="bg-slate-50 text-[11px] uppercase text-slate-500">
+                  <thead className="md:sticky md:top-0 z-10 bg-slate-50 text-[11px] uppercase text-slate-500 shadow-[0_1px_0_0_rgb(241,245,249)]">
                     <tr>
-                      <th className="p-3 w-10"></th>
+                      <th className="p-3 w-10"><input type="checkbox" aria-label="Select all shown" checked={allShownSelected} onChange={toggleAllShown} disabled={selectableShown.length === 0} /></th>
+                      <th className="p-3 w-8 text-right">#</th>
                       <th className="p-3 text-left">Project</th>
-                      <th className="p-3 text-right">Value</th>
-                      <th className="p-3 text-right">Paid</th>
-                      <th className="p-3 text-right">Invoiced, unpaid</th>
+                      <th className="p-3 text-right hidden sm:table-cell">Value</th>
+                      <th className="p-3 text-right hidden sm:table-cell">Paid</th>
+                      <th className="p-3 text-right hidden sm:table-cell">Invoiced, unpaid</th>
                       <th className="p-3 text-right">Left to invoice</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {visibleBalances.map(b => {
+                    {visibleBalances.map((b, i) => {
                       const done = b.remaining <= 0;
                       return (
-                        <tr key={b.project_id} className={done ? 'text-slate-400' : 'hover:bg-slate-50 cursor-pointer'} onClick={() => !done && toggleProject(b)}>
+                        <tr key={b.project_id} className={done ? 'text-slate-400' : `cursor-pointer ${selected[b.project_id] ? 'bg-blue-50/60' : 'hover:bg-slate-50'}`} onClick={() => !done && toggleProject(b)}>
                           <td className="p-3"><input type="checkbox" disabled={done} checked={!!selected[b.project_id]} onChange={() => toggleProject(b)} onClick={e => e.stopPropagation()} /></td>
+                          <td className="p-3 text-right text-xs text-slate-400 tabular-nums">{i + 1}</td>
                           <td className="p-3"><span className="font-semibold">{b.project_name}</span><span className="block text-xs text-slate-400">{b.stream_name}</span></td>
-                          <td className="p-3 text-right">{formatCurrency(b.project_value)}</td>
-                          <td className="p-3 text-right">{formatCurrency(b.paid)}</td>
-                          <td className="p-3 text-right">{formatCurrency(b.open_invoiced)}</td>
+                          <td className="p-3 text-right hidden sm:table-cell">{formatCurrency(b.project_value)}</td>
+                          <td className="p-3 text-right hidden sm:table-cell">{formatCurrency(b.paid)}</td>
+                          <td className="p-3 text-right hidden sm:table-cell">{formatCurrency(b.open_invoiced)}</td>
                           <td className="p-3 text-right font-bold">{done ? 'Nothing left' : formatCurrency(b.remaining)}</td>
                         </tr>
                       );
@@ -342,17 +375,35 @@ const InvoicesView: React.FC = () => {
                 </table>
               </div>
             )}
-            <div className="flex items-center justify-between gap-4">
-              {doneCount > 0 ? (
-                <button type="button" onClick={() => setShowDone(v => !v)} className="text-xs font-semibold text-slate-500 hover:text-slate-800">
-                  {showDone ? 'Hide' : 'Show'} {doneCount} fully paid or already invoiced
-                </button>
-              ) : <span />}
-              <button disabled={selectedBalances.length === 0} onClick={() => setStep('review')} className="px-5 py-2.5 bg-slate-900 text-white rounded-xl font-bold disabled:opacity-40">
-                Continue with {selectedBalances.length} project{selectedBalances.length === 1 ? '' : 's'}
+
+            <div className="shrink-0 sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] md:static z-10 -mx-3 px-3 md:mx-0 md:px-0 py-3 md:pb-0 bg-white/95 backdrop-blur md:bg-transparent border-t border-slate-200 md:border-slate-100 rounded-b-xl md:rounded-none flex items-center gap-3">
+              <div className="flex-1 min-w-0 space-y-1">
+                <dl className="grid grid-cols-3 sm:flex sm:flex-wrap gap-x-6 gap-y-1">
+                  {([
+                    ['Selected', String(selectedBalances.length), 'text-slate-900'],
+                    ['Value', formatCurrency(selectedTotals.value), 'text-slate-900'],
+                    ['Paid', formatCurrency(selectedTotals.paid), 'text-emerald-700'],
+                    ['Invoiced, unpaid', formatCurrency(selectedTotals.openInvoiced), 'text-slate-900'],
+                    ['Left to invoice', formatCurrency(selectedTotals.remaining), 'text-blue-700'],
+                  ] as const).map(([label, value, cls]) => (
+                    // Phones keep Value + Left to invoice; the count is already on the button.
+                    <div key={label} className={`min-w-0 ${['Selected', 'Paid', 'Invoiced, unpaid'].includes(label) ? 'hidden sm:block' : ''}`}>
+                      <dt className="text-[10px] font-bold uppercase tracking-wider text-slate-400 whitespace-nowrap">{label}</dt>
+                      <dd className={`text-sm font-bold tabular-nums whitespace-nowrap ${cls}`}>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {selectedStreamCount > 1 && (
+                  <p className="text-xs font-semibold text-amber-700">{selectedStreamCount} income streams selected — one invoice can only cover one stream.</p>
+                )}
+              </div>
+              <button disabled={selectedBalances.length === 0} onClick={() => setStep('review')} className="shrink-0 px-4 md:px-5 py-2.5 text-sm md:text-base bg-slate-900 text-white rounded-xl font-bold disabled:opacity-40">
+                <span className="md:hidden">Continue ({selectedBalances.length})</span>
+                <span className="hidden md:inline">Continue with {selectedBalances.length} project{selectedBalances.length === 1 ? '' : 's'}</span>
               </button>
             </div>
           </div>
+          )
         )}
 
         {step === 'review' && client && (
@@ -414,8 +465,14 @@ const InvoicesView: React.FC = () => {
             )}
             {createError && <p className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl p-3">{createError}</p>}
 
-            <div className="flex justify-end">
-              <button disabled={!canCreate} onClick={createInvoice} className="px-5 py-3 bg-blue-600 text-white rounded-xl font-bold disabled:opacity-40 flex items-center gap-2">
+            {/* Stays on screen while the lines above scroll. */}
+            <div className="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] md:bottom-0 z-10 -mx-2 px-4 py-3 bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-lg flex items-center gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 whitespace-nowrap">Total · {selectedBalances.length} line{selectedBalances.length === 1 ? '' : 's'}</p>
+                <p className="text-xl font-black text-slate-900 tabular-nums">{formatCurrency(total)}</p>
+                <p className="text-xs text-slate-500 tabular-nums truncate">of {formatCurrency(selectedTotals.remaining)} left to invoice{Object.keys(lineErrors).length > 0 ? ` · ${Object.keys(lineErrors).length} line${Object.keys(lineErrors).length === 1 ? '' : 's'} need fixing` : ''}</p>
+              </div>
+              <button disabled={!canCreate} onClick={createInvoice} className="shrink-0 px-4 md:px-5 py-3 text-sm md:text-base bg-blue-600 text-white rounded-xl font-bold disabled:opacity-40 flex items-center gap-2">
                 {creating && <Loader2 size={16} className="animate-spin" />}
                 Create payment link
               </button>
